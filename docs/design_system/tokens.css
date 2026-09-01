@@ -1,0 +1,77 @@
+/* Habit Chronicle — design tokens (direction 2a: Grand Hotel + Lato)
+   Source of truth for the month-dashboard design. Import once, use everywhere. */
+
+@import url('https://fonts.googleapis.com/css2?family=Grand+Hotel&family=Lato:wght@400;700;900&display=swap');
+
+:root {
+  /* ---- Surfaces (warm paper) ---- */
+  --hc-bg:            #faf7f2;  /* app / page background */
+  --hc-surface:       #ffffff;  /* cards, widgets */
+  --hc-surface-sunk:  #f7f4ee;  /* inset stat tiles inside a card */
+  --hc-surface-ink:   #241e18;  /* inverted surface: primary button */
+  --hc-border:        #ece5da;  /* card border */
+  --hc-border-strong: #e8e1d6;  /* control border (buttons, inputs) */
+  --hc-rule:          #f0eae1;  /* hairline dividers, chart gridlines */
+
+  /* ---- Text ---- */
+  --hc-text:          #241e18;  /* primary */
+  --hc-text-body:     #4d463d;  /* row labels, body copy */
+  --hc-text-muted:    #8d8375;  /* secondary / captions */
+  --hc-text-label:    #9b9084;  /* uppercase widget labels */
+  --hc-text-faint:    #bdb3a5;  /* axis ticks, tertiary meta */
+
+  /* ---- Semantic data colors ---- */
+  --hc-done:          #6fa86a;  /* habit kept — grid cell, totals line */
+  --hc-done-deep:     #5d9758;  /* kept cell in the selected column */
+  --hc-done-tint:     #eef5ec;  /* kept chip background */
+  --hc-done-text:     #3f6b3b;  /* kept chip text */
+  --hc-missed:        #f3ddd6;  /* habit missed — grid cell */
+  --hc-missed-deep:   #eccfc5;  /* missed cell in the selected column */
+  --hc-missed-tint:   #faf0ec;  /* missed chip background */
+  --hc-missed-text:   #a86a52;  /* missed chip text */
+  --hc-sleep:         #4a86c4;  /* sleep series (dashed line) */
+
+  /* ---- Alert / cross-check (the red-line QA system) ---- */
+  --hc-flag:          #e8843c;  /* mismatch dot, selection ring, status dot */
+  --hc-flag-text:     #b8621f;
+  --hc-flag-bg:       #fdf0e6;
+  --hc-flag-border:   #f2d4b8;
+
+  /* ---- Type ---- */
+  --hc-font-display:  'Grand Hotel', Georgia, serif;   /* month name, day heading ONLY */
+  --hc-font-body:     'Lato', system-ui, sans-serif;   /* everything else */
+
+  --hc-size-display:  46px;   /* month title — weight 400, tracking 0 */
+  --hc-size-day:      26px;   /* selected-day heading in the detail rail */
+  --hc-size-metric:   32px;   /* big stat number — weight 900 */
+  --hc-size-metric-s: 22px;   /* inset tile number — weight 900 */
+  --hc-size-card:     16px;   /* card title — weight 700 */
+  --hc-size-base:     13px;
+  --hc-size-sm:       12.5px; /* controls, chips, list rows */
+  --hc-size-xs:       11.5px; /* captions, legends, meta */
+  --hc-size-2xs:      10.5px; /* inset tile labels */
+  --hc-size-tick:     8.5px;  /* grid day numbers, axis ticks */
+
+  --hc-track-tight:  -.02em;  /* metric numbers, card titles */
+  --hc-track-label:   .06em;  /* uppercase widget labels */
+  --hc-track-eyebrow: .14em;  /* "HABIT CHRONICLE" eyebrow */
+
+  /* ---- Space (4px base) ---- */
+  --hc-space-1: 4px;  --hc-space-2: 6px;  --hc-space-3: 8px;
+  --hc-space-4: 10px; --hc-space-5: 14px; --hc-space-6: 18px;
+  --hc-space-7: 20px; --hc-space-8: 22px; --hc-space-9: 28px;
+  --hc-gutter:  14px;  /* the single gap between every widget */
+  --hc-cell-gap: 3px;  /* between heatmap cells */
+
+  /* ---- Radius ---- */
+  --hc-radius-cell:  4px;   /* heatmap cell */
+  --hc-radius-ctl:  10px;   /* buttons, header controls */
+  --hc-radius-tile: 12px;   /* inset tiles, flag cards */
+  --hc-radius-card: 16px;   /* stat widgets */
+  --hc-radius-panel:18px;   /* large widgets (grid, chart, rail) */
+  --hc-radius-pill: 20px;   /* habit chips */
+
+  /* ---- Elevation ---- */
+  --hc-shadow-card: none;                      /* flat; borders do the work */
+  --hc-ring-select: 0 0 0 1.5px var(--hc-flag);/* selected-day cell ring */
+}

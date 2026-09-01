@@ -1,0 +1,262 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet data-dc-atomics>
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Grand+Hotel&family=Lato:wght@400;700;900&display=swap" rel="stylesheet">
+</helmet>
+<div style="background:#faf7f2;padding:26px 28px 30px;color:#241e18;font-family:'Lato',system-ui,sans-serif">
+
+<div style="display:flex;align-items:flex-end;justify-content:space-between;margin-bottom:22px">
+<div>
+<div style="font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:#a79c8e;font-weight:700;margin-bottom:7px">Habit Chronicle</div>
+<div style="font-size:46px;font-weight:400;letter-spacing:0;line-height:1;font-family:'Grand Hotel',Georgia,serif">June 2026</div>
+<div style="font-size:13px;color:#8d8375;margin-top:8px">Imported 1 Jul · 13 habits · 30 days</div>
+</div>
+<div style="display:flex;gap:10px;align-items:center">
+<div style="display:flex;align-items:center;gap:8px;background:#fdf0e6;border:1px solid #f2d4b8;color:#b8621f;padding:9px 14px;border-radius:10px;font-size:12.5px;font-weight:700">
+<span style="width:7px;height:7px;border-radius:50%;background:#e8843c;display:block"></span>2 days flagged by cross-check</div>
+<div onClick="{{ togglePhoto }}" style="display:flex;align-items:center;gap:8px;background:#fff;border:1px solid #e8e1d6;padding:9px 14px;border-radius:10px;font-size:12.5px;font-weight:700;color:#5f584d;cursor:pointer" style-hover="border-color:#241e18">
+<span style="width:15px;height:12px;border:1.5px solid #8d8375;border-radius:2.5px;display:block"></span>View source photo</div>
+<div style="background:#241e18;color:#fff;padding:9px 16px;border-radius:10px;font-size:12.5px;font-weight:700;cursor:pointer">Import a spread</div>
+</div>
+</div>
+
+<sc-if value="{{ photoOpen }}" hint-placeholder-val="{{ false }}">
+<div style="background:#fff;border:1px solid #e8e1d6;border-radius:16px;padding:16px;margin-bottom:14px;display:flex;gap:16px;align-items:center">
+<div style="flex:1;height:180px;border-radius:10px;background:repeating-linear-gradient(135deg,#f4efe7 0 8px,#efe8dd 8px 16px);display:flex;align-items:center;justify-content:center;font-family:ui-monospace,Menlo,monospace;font-size:11px;color:#a79c8e;letter-spacing:.06em">photo of the June spread — left page</div>
+<div style="flex:1;height:180px;border-radius:10px;background:repeating-linear-gradient(135deg,#f4efe7 0 8px,#efe8dd 8px 16px);display:flex;align-items:center;justify-content:center;font-family:ui-monospace,Menlo,monospace;font-size:11px;color:#a79c8e;letter-spacing:.06em">photo of the June spread — habit grid</div>
+<div style="width:180px;flex:none">
+<div style="font-size:12.5px;font-weight:700">Source photo</div>
+<div style="font-size:11.5px;color:#8d8375;margin-top:6px;line-height:1.5">IMG_4820.heic · 12 MP<br>archived 1 Jul 2026</div>
+<div onClick="{{ togglePhoto }}" style="margin-top:12px;font-size:11.5px;font-weight:700;color:#b8621f;cursor:pointer">Hide</div>
+</div>
+</div>
+</sc-if>
+
+<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-bottom:14px">
+<div style="background:#fff;border:1px solid #ece5da;border-radius:16px;padding:18px 20px">
+<div style="font-size:11.5px;color:#9b9084;font-weight:700;letter-spacing:.06em;text-transform:uppercase">Completion</div>
+<div style="display:flex;align-items:baseline;gap:8px;margin-top:10px"><span style="font-size:32px;font-weight:900;letter-spacing:-.02em">62.3%</span><span style="font-size:12.5px;font-weight:700;color:#6fa86a">+32.1</span></div>
+<div style="height:6px;border-radius:3px;background:#f0eae1;margin-top:12px;overflow:hidden"><div style="width:62.3%;height:100%;background:#6fa86a;border-radius:3px"></div></div>
+<div style="font-size:11.5px;color:#a79c8e;margin-top:8px">243 of 390 cells green</div>
+</div>
+<div style="background:#fff;border:1px solid #ece5da;border-radius:16px;padding:18px 20px">
+<div style="font-size:11.5px;color:#9b9084;font-weight:700;letter-spacing:.06em;text-transform:uppercase">Longest streak</div>
+<div style="display:flex;align-items:baseline;gap:8px;margin-top:10px"><span style="font-size:32px;font-weight:900;letter-spacing:-.02em">18</span><span style="font-size:13px;color:#8d8375">days</span></div>
+<div style="font-size:12.5px;color:#5f584d;margin-top:12px;font-weight:700">Morning pages</div>
+<div style="font-size:11.5px;color:#a79c8e;margin-top:4px">4 Jun → 21 Jun</div>
+</div>
+<div style="background:#fff;border:1px solid #ece5da;border-radius:16px;padding:18px 20px">
+<div style="font-size:11.5px;color:#9b9084;font-weight:700;letter-spacing:.06em;text-transform:uppercase">Mean sleep</div>
+<div style="display:flex;align-items:baseline;gap:8px;margin-top:10px"><span style="font-size:32px;font-weight:900;letter-spacing:-.02em">6.9</span><span style="font-size:13px;color:#8d8375">h / night</span></div>
+<div style="font-size:11.5px;color:#a79c8e;margin-top:12px">σ 1.2 · shortest 4.5h on 9 Jun</div>
+</div>
+<div style="background:#fff;border:1px solid #ece5da;border-radius:16px;padding:18px 20px">
+<div style="font-size:11.5px;color:#9b9084;font-weight:700;letter-spacing:.06em;text-transform:uppercase">Best day</div>
+<div style="display:flex;align-items:baseline;gap:8px;margin-top:10px"><span style="font-size:32px;font-weight:900;letter-spacing:-.02em">11</span><span style="font-size:13px;color:#8d8375">of 13 habits</span></div>
+<div style="font-size:12.5px;color:#5f584d;margin-top:12px;font-weight:700">Saturday 20 June</div>
+<div style="font-size:11.5px;color:#a79c8e;margin-top:4px">Worst: 2 Jun — 1 habit</div>
+</div>
+</div>
+
+<div style="display:grid;grid-template-columns:1fr 336px;gap:14px">
+
+<div style="display:flex;flex-direction:column;gap:14px">
+
+<div style="background:#fff;border:1px solid #ece5da;border-radius:18px;padding:20px 22px 22px">
+<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px">
+<div><div style="font-size:16px;font-weight:700;letter-spacing:-.01em">The grid</div><div style="font-size:11.5px;color:#a79c8e;margin-top:3px">Click a day column to read that day</div></div>
+<div style="display:flex;gap:14px;align-items:center;font-size:11.5px;color:#8d8375">
+<span style="display:flex;align-items:center;gap:6px"><span style="width:11px;height:11px;border-radius:3px;background:#6fa86a;display:block"></span>done</span>
+<span style="display:flex;align-items:center;gap:6px"><span style="width:11px;height:11px;border-radius:3px;background:#f3ddd6;display:block"></span>missed</span>
+<span style="display:flex;align-items:center;gap:6px"><span style="width:11px;height:11px;border-radius:3px;background:#e8843c;display:block"></span>flagged day</span>
+</div>
+</div>
+<div style="display:flex;gap:10px">
+<div style="width:132px;flex:none;padding-top:20px;display:flex;flex-direction:column;gap:5px">
+<sc-for list="{{ habits }}" as="h" hint-placeholder-count="13">
+<div style="height:19px;display:flex;align-items:center;gap:6px;font-size:11.5px">
+<span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#4d463d;font-weight:500">{{ h.name }}</span>
+<span style="font-size:10px;color:#b3a99b;font-variant-numeric:tabular-nums">{{ h.pct }}</span>
+</div>
+</sc-for>
+</div>
+<div style="flex:1;min-width:0">
+<div style="display:grid;grid-template-columns:repeat(30,1fr);gap:3px;margin-bottom:5px">
+<sc-for list="{{ days }}" as="d" hint-placeholder-count="30">
+<div onClick="{{ d.select }}" style="font-size:8.5px;text-align:center;font-variant-numeric:tabular-nums;height:15px;line-height:15px;border-radius:4px;cursor:pointer;color:{{ d.headColor }};background:{{ d.headBg }};font-weight:{{ d.headWeight }}">{{ d.num }}</div>
+</sc-for>
+</div>
+<div style="display:flex;flex-direction:column;gap:5px">
+<sc-for list="{{ habits }}" as="h" hint-placeholder-count="13">
+<div style="display:grid;grid-template-columns:repeat(30,1fr);gap:3px;height:19px">
+<sc-for list="{{ h.cells }}" as="c" hint-placeholder-count="30">
+<div onClick="{{ c.select }}" style="border-radius:4px;cursor:pointer;background:{{ c.bg }};box-shadow:{{ c.ring }}"></div>
+</sc-for>
+</div>
+</sc-for>
+</div>
+</div>
+</div>
+</div>
+
+<div style="background:#fff;border:1px solid #ece5da;border-radius:18px;padding:20px 22px 18px">
+<div style="display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:14px">
+<div><div style="font-size:16px;font-weight:700;letter-spacing:-.01em">Daily totals &amp; sleep</div><div style="font-size:11.5px;color:#a79c8e;margin-top:3px">Habits completed per day, computed from the grid, against hours slept</div></div>
+<div style="display:flex;gap:14px;align-items:center;font-size:11.5px;color:#8d8375">
+<span style="display:flex;align-items:center;gap:6px"><span style="width:14px;height:3px;border-radius:2px;background:#6fa86a;display:block"></span>habits / day</span>
+<span style="display:flex;align-items:center;gap:6px"><span style="width:14px;height:3px;border-radius:2px;background:#4a86c4;display:block"></span>sleep</span>
+<span style="display:flex;align-items:center;gap:6px"><span style="width:9px;height:9px;border-radius:50%;background:#e8843c;display:block"></span>line mismatch</span>
+</div>
+</div>
+<div style="display:flex;gap:10px">
+<div style="width:22px;flex:none;display:flex;flex-direction:column;justify-content:space-between;height:170px;font-size:9.5px;color:#bdb3a5;text-align:right;font-variant-numeric:tabular-nums">
+<span>13</span><span>9</span><span>4</span><span>0</span>
+</div>
+<div style="flex:1;min-width:0">
+<svg viewBox="0 0 600 170" preserveAspectRatio="none" style="width:100%;height:170px;display:block;overflow:visible">
+<line x1="0" y1="1" x2="600" y2="1" stroke="#f0eae1" stroke-width="1" vector-effect="non-scaling-stroke"></line>
+<line x1="0" y1="57" x2="600" y2="57" stroke="#f0eae1" stroke-width="1" vector-effect="non-scaling-stroke"></line>
+<line x1="0" y1="113" x2="600" y2="113" stroke="#f0eae1" stroke-width="1" vector-effect="non-scaling-stroke"></line>
+<line x1="0" y1="169" x2="600" y2="169" stroke="#e5ddd1" stroke-width="1" vector-effect="non-scaling-stroke"></line>
+<line x1="{{ selX }}" y1="0" x2="{{ selX }}" y2="170" stroke="#e8c8a8" stroke-width="1.5" stroke-dasharray="3 3" vector-effect="non-scaling-stroke"></line>
+<path d="{{ totalArea }}" fill="#6fa86a" fill-opacity="0.13"></path>
+<path d="{{ totalLine }}" fill="none" stroke="#6fa86a" stroke-width="2.2" stroke-linejoin="round" stroke-linecap="round" vector-effect="non-scaling-stroke"></path>
+<path d="{{ sleepLine }}" fill="none" stroke="#4a86c4" stroke-width="1.8" stroke-dasharray="5 4" stroke-linejoin="round" vector-effect="non-scaling-stroke"></path>
+<sc-for list="{{ mismatch }}" as="m" hint-placeholder-count="2">
+<circle cx="{{ m.x }}" cy="{{ m.y }}" r="4" fill="#e8843c"></circle>
+</sc-for>
+<circle cx="{{ selX }}" cy="{{ selY }}" r="4.5" fill="#fff" stroke="#6fa86a" stroke-width="2.5" vector-effect="non-scaling-stroke"></circle>
+</svg>
+<div style="display:grid;grid-template-columns:repeat(30,1fr);margin-top:7px">
+<sc-for list="{{ days }}" as="d" hint-placeholder-count="30">
+<div style="font-size:8.5px;color:#bdb3a5;text-align:center;font-variant-numeric:tabular-nums">{{ d.label }}</div>
+</sc-for>
+</div>
+</div>
+</div>
+</div>
+
+</div>
+
+<div style="display:flex;flex-direction:column;gap:14px">
+
+<div style="background:#fff;border:1px solid #ece5da;border-radius:18px;padding:20px;flex:1">
+<div style="display:flex;align-items:baseline;justify-content:space-between">
+<div style="font-size:26px;font-weight:400;letter-spacing:0;font-family:'Grand Hotel',Georgia,serif">{{ sel.long }}</div>
+<div style="font-size:11.5px;color:#a79c8e">day {{ sel.day }} of 30</div>
+</div>
+<div style="display:flex;gap:8px;margin-top:14px">
+<div style="flex:1;background:#f7f4ee;border-radius:12px;padding:12px 14px">
+<div style="font-size:10.5px;letter-spacing:.08em;text-transform:uppercase;color:#a79c8e;font-weight:700">Habits</div>
+<div style="font-size:22px;font-weight:900;margin-top:4px">{{ sel.total }}<span style="font-size:12px;color:#a79c8e;font-weight:600"> / 13</span></div>
+</div>
+<div style="flex:1;background:#f7f4ee;border-radius:12px;padding:12px 14px">
+<div style="font-size:10.5px;letter-spacing:.08em;text-transform:uppercase;color:#a79c8e;font-weight:700">Sleep</div>
+<div style="font-size:22px;font-weight:900;margin-top:4px">{{ sel.sleep }}<span style="font-size:12px;color:#a79c8e;font-weight:600">h</span></div>
+</div>
+</div>
+<div style="margin-top:16px">
+<div style="font-size:10.5px;letter-spacing:.08em;text-transform:uppercase;color:#a79c8e;font-weight:700;margin-bottom:8px">Memorable moment</div>
+<div style="font-size:15px;line-height:1.5;color:#241e18;text-wrap:pretty">{{ sel.moment }}</div>
+<div style="font-size:11px;color:#bdb3a5;margin-top:8px">read from the left page · confirmed at review</div>
+</div>
+<div style="margin-top:18px;border-top:1px solid #f0eae1;padding-top:14px">
+<div style="font-size:10.5px;letter-spacing:.08em;text-transform:uppercase;color:#a79c8e;font-weight:700;margin-bottom:10px">Kept that day</div>
+<div style="display:flex;flex-wrap:wrap;gap:6px">
+<sc-for list="{{ sel.kept }}" as="k" hint-placeholder-count="9">
+<div style="font-size:11.5px;background:#eef5ec;color:#3f6b3b;border-radius:20px;padding:5px 11px">{{ k }}</div>
+</sc-for>
+</div>
+<div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:8px">
+<sc-for list="{{ sel.missed }}" as="k" hint-placeholder-count="4">
+<div style="font-size:11.5px;background:#faf0ec;color:#a86a52;border-radius:20px;padding:5px 11px">{{ k }}</div>
+</sc-for>
+</div>
+</div>
+</div>
+
+<div style="background:#fdf0e6;border:1px solid #f2d4b8;border-radius:18px;padding:18px 20px">
+<div style="font-size:13px;font-weight:700;color:#b8621f;margin-bottom:12px">Cross-check flags</div>
+<sc-for list="{{ flags }}" as="f" hint-placeholder-count="2">
+<div onClick="{{ f.select }}" style="background:#fff;border-radius:12px;padding:12px 14px;margin-bottom:8px;cursor:pointer">
+<div style="font-size:12.5px;font-weight:700;color:#241e18">{{ f.day }}</div>
+<div style="font-size:11.5px;color:#8d8375;margin-top:4px">{{ f.detail }}</div>
+</div>
+</sc-for>
+<div style="font-size:11.5px;color:#b8621f;font-weight:700;margin-top:4px">Re-open review →</div>
+</div>
+
+</div>
+</div>
+</div>
+
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;:{&quot;width&quot;:1180,&quot;height&quot;:860}}">
+const NAMES = ["Wake before 7","Morning pages","Prayer on time","Workout","Read 30 min","Study Rust","No sugar","Water 2L","Walk 5k steps","Darija practice","Journal","No phone in bed","Stretch"];
+const RATES = [.55,.83,.72,.60,.77,.45,.38,.90,.67,.50,.85,.42,.63];
+const MOMENTS = {3:"Visited Hassan II Mosque in Casablanca.",9:"Long call with Yassine — on ferme le chapitre Lyon.",14:"Grid extraction finally matched the drawn line, first try.",20:"Eleven of thirteen. Best day since I started the journal.",23:"Rain all afternoon; wrote the paper-template spec instead of running.",27:"Ftour on the terrace, l'ma3 nas kamlin. Slept badly, worth it."};
+const WD = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
+function mulberry(a){return function(){a|=0;a=a+0x6D2B79F5|0;let t=Math.imul(a^a>>>15,1|a);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296}}
+const FLAGGED=[9,23];
+class Component extends DCLogic {
+  state = { day: 20, photoOpen: false };
+  renderVals(){
+    const p=this.props, sel=this.state.day;
+    const rnd=mulberry(20260601);
+    const habits=NAMES.map((name,i)=>{
+      let done=0;
+      const cells=Array.from({length:30},(_,d)=>{
+        const on=rnd()<RATES[i]*(0.75+0.5*((d%7<5)?1:0.6));
+        if(on)done++;
+        const isSel=d+1===sel;
+        return {on,day:d+1,
+          bg:on?(isSel?"#5d9758":"#6fa86a"):(isSel?"#eccfc5":"#f3ddd6"),
+          ring:isSel?"0 0 0 1.5px #e8843c":"none",
+          select:()=>this.setState({day:d+1})};
+      });
+      return {name,cells,pct:Math.round(done/30*100)+"%"};
+    });
+    const totals=Array.from({length:30},(_,d)=>habits.reduce((s,h)=>s+(h.cells[d].on?1:0),0));
+    const sleep=Array.from({length:30},()=>Math.round((4.5+rnd()*4.5)*10)/10);
+    const X=d=>(d/29)*600, YT=v=>169-(v/13)*168, YS=v=>169-((v-3.5)/6.5)*168;
+    const totalLine="M"+totals.map((t,d)=>`${X(d).toFixed(1)},${YT(t).toFixed(1)}`).join("L");
+    const days=totals.map((t,d)=>({
+      num:String(d+1),
+      label:(d+1)%5===0||d===0?String(d+1):"",
+      headBg:d+1===sel?"#241e18":(FLAGGED.includes(d+1)?"#fdf0e6":"transparent"),
+      headColor:d+1===sel?"#fff":(FLAGGED.includes(d+1)?"#b8621f":"#bdb3a5"),
+      headWeight:d+1===sel?"700":"500",
+      select:()=>this.setState({day:d+1})
+    }));
+    const kept=habits.filter(h=>h.cells[sel-1].on).map(h=>h.name);
+    const missed=habits.filter(h=>!h.cells[sel-1].on).map(h=>h.name);
+    const dt=new Date(2026,5,sel);
+    return {
+      habits,days,
+      totalLine, totalArea:totalLine+`L600,169L0,169Z`,
+      sleepLine:"M"+sleep.map((s,d)=>`${X(d).toFixed(1)},${YS(s).toFixed(1)}`).join("L"),
+      selX:X(sel-1).toFixed(1), selY:YT(totals[sel-1]).toFixed(1),
+      mismatch:FLAGGED.map(d=>({x:X(d-1).toFixed(1),y:YT(totals[d-1]).toFixed(1)})),
+      photoOpen:this.state.photoOpen,
+      togglePhoto:()=>this.setState(s=>({photoOpen:!s.photoOpen})),
+      sel:{day:sel,long:`${WD[(dt.getDay()+6)%7]} ${sel} June`,total:totals[sel-1],sleep:sleep[sel-1],
+        moment:MOMENTS[sel]||"No line written on the left page for this day.",kept,missed},
+      flags:[
+        {day:"9 June",detail:"Grid says "+totals[8]+" habits, drawn line reads "+(totals[8]+2)+". Two cells likely misread.",select:()=>this.setState({day:9})},
+        {day:"23 June",detail:"Grid says "+totals[22]+", drawn line reads "+(totals[22]+1)+". Check the ‘Stretch’ row.",select:()=>this.setState({day:23})}
+      ]
+    };
+  }
+}
+
+</script>
+</body>
+</html>

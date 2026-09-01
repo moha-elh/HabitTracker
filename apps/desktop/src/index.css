@@ -1,0 +1,11 @@
+@import "tailwindcss";
+
+/* Shared design system — direction 2a (Grand Hotel + Lato). Single source of truth. */
+@import "../../../docs/design_system/tokens.css";
+
+body {
+  margin: 0;
+  background: var(--hc-bg);
+  color: var(--hc-text);
+  font-family: var(--hc-font-body);
+}

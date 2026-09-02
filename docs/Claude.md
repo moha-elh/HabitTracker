@@ -4,6 +4,14 @@
 
 This document is the single source of truth for Claude Code working on this project. Read it fully before writing any code. When something here conflicts with an ad-hoc chat instruction, ask before diverging.
 
+> **Revision (2026-09-02):** the analog side stays **hand-drawn, with no printed template and
+> no fiducial markers** (decision by Moha; sample spreads in `docs/samplePhoto/`). The grid is
+> located from its own **saturated green/red color block**, not from fiducials. The **habit
+> list changes month to month and is read from the photo each import** (CV counts the rows; the
+> vision-LLM reads only the handwritten label text). This supersedes §7 (paper template) and
+> the fiducial parts of §4/§9 below, which are kept for context but marked. Reliability rests on
+> the review screen (§10), since Moha corrects the draft by hand.
+
 ---
 
 ## 1. The Idea
@@ -32,7 +40,7 @@ Getting the domain right eliminates whole features:
 - **Habits are binary per day.** The grid is the ground truth for everything.
 - **"Total of habits" is DERIVED.** It's the column-sum of green cells per day. Do **not** extract it from the chart — compute it. Same for the completion `%` (green ÷ total cells).
 - **The hand-drawn red line is therefore a free QA signal.** After computing daily totals from the grid, compare against the drawn red line. A mismatch flags a probable grid-extraction error on that day. Build this cross-check in.
-- **Sleep (blue line) is the ONLY independent continuous metric.** It's the one thing that can't be computed from the grid, so it's the only chart that genuinely needs digitizing — or, preferably, read from a written number (see §7, paper template).
+- **Sleep (blue line) is the ONLY independent continuous metric.** It's the one thing that can't be computed from the grid, so it's the only chart that genuinely needs digitizing — entered manually in the review UI for now (OCR of the written number is a later upgrade; see §7).
 - **Memorable moments** are one free-text line per day, multilingual.
 - **A "month" is the unit of import.** Imports are idempotent: re-importing the same month updates rows keyed on `(year, month, day)`, never duplicates.
 
@@ -45,14 +53,15 @@ Getting the domain right eliminates whole features:
 **Frontend / shell — desktop app**
 - **Tauri v2** (Rust host) — native desktop app, small binary, secure.
 - **React + TypeScript + Vite** for the UI.
-- **Tailwind CSS** for styling (design system per `docs/design-guidelines.md`).
+- **Tailwind CSS** for styling (design system in `docs/design_system/`, direction 2a — see §12).
 - Charts: **Recharts** (or visx); the habit heatmap as custom SVG/CSS.
 
 **Pipeline / backend — Python sidecar**
 - **Python 3.11+**, packaged with **PyInstaller** and shipped as a **Tauri sidecar binary**.
 - Runs a local **FastAPI** (uvicorn) server on a loopback port; Tauri spawns it on launch and terminates it on exit. React talks to it over `http://127.0.0.1:<port>`.
-- **OpenCV** (`opencv-python`) + **NumPy** for image processing; `cv2.aruco` for fiducial markers.
-- **Anthropic SDK** for the vision step (a current vision-capable Claude model, **configurable via env** — never hardcode a model string).
+- **OpenCV** (`opencv-python`) + **NumPy** for image processing (grid localization by color block, perspective warp, HSV cell classification — **no fiducials**; see the Revision note).
+- **Vision LLM via the OpenAI-compatible chat API** for the vision steps — reading the handwritten **habit labels** (per month) and later the **notes**. Provider-agnostic on purpose: `base_url` + `model` + `api_key` come from **env** (never hardcode a model string), so any free provider works — Gemini (default), Groq, OpenRouter, or local Ollama — by env change alone. Called with `httpx` behind a swappable `LabelReader` interface; no key ⇒ blank labels typed in review (local-first). Current default model `gemini-flash-lite-latest` (Gemini's free tier, OpenAI-compat endpoint; heavier flash models time out on free quota). Images are downscaled before sending.
+- API key from the OS secure store / `.env` (never in the repo or bundle — §10).
 - **Pydantic** for the extraction JSON contract and API schemas.
 
 **Data**
@@ -85,10 +94,13 @@ Getting the domain right eliminates whole features:
    │ Python sidecar (FastAPI)  ────────────────┼─┘
    │  api/          thin HTTP layer            │
    │  pipeline/     PURE module (see §5)       │
-   │    ├ registration  (flatten via fiducials)│
-   │    ├ grid          (HSV cell classifier)  │
-   │    ├ sleep         (OCR / passthrough)    │
-   │    ├ notes         (vision LLM)           │
+   │    ├ grid          (color-block warp +    │
+   │    │                CV row count + HSV    │
+   │    │                cell classifier)      │
+   │    ├ labels        (vision LLM: habit     │
+   │    │                names, per month)     │
+   │    ├ sleep         (manual / OCR later)   │
+   │    ├ notes         (vision LLM, Phase 2)  │
    │    └ contract.py   (pydantic schemas)     │
    │  db/           SQLite (single writer)     │
    └──────────────────────────────────────────┘
@@ -96,16 +108,17 @@ Getting the domain right eliminates whole features:
 
 **Data flow (one import):**
 1. User drops a photo → frontend POSTs the image to the sidecar.
-2. `registration`: detect 4 corner fiducials → perspective-warp to a canonical rectangle → crop into grid / sleep / notes regions.
-3. `grid`: for each known cell coordinate, sample dominant color → HSV threshold → `done | missed | empty`.
-4. `sleep`: OCR the written number (or accept a value entered in the review UI).
-5. `notes`: send the notes crop to the vision LLM → structured `{day, weekday, text}[]`.
-6. Sidecar returns a **draft** extraction (JSON matching the contract). **Nothing is saved yet.**
-7. **Review screen**: draft overlaid on the photo; user corrects errors; the red-line cross-check highlights suspect days.
-8. On confirm → sidecar writes to SQLite (idempotent on `(year, month, day)`), and archives the raw photo + raw extraction JSON.
-9. Dashboard + insights read from SQLite.
+2. `grid` (localize): mask the saturated green/red block → find its 4 corners → perspective-warp to a canonical rectangle (**no fiducials** — the colored block is the registration target).
+3. `grid` (classify): rows = the number of habit labels read; columns = the grid's day count (defaults to the month length, user-adjustable — grids vary, e.g. a 30-column August). Slice the rectified block into `rows × cols`, sample each cell's dominant color → HSV threshold → `done | missed | empty` with a confidence. (CV aspect-ratio counting proved unreliable on hand-drawn grids — counts come from the labels + the user instead.)
+4. `labels`: crop the habit-label strip → vision LLM reads the handwritten row labels → habit names in row order (the list changes monthly). Falls back to blank labels (typed in review) if disabled/offline.
+5. `sleep`: entered in the review UI (OCR of the written number is a later upgrade).
+6. `notes` (Phase 2): send the notes crop to the vision LLM → structured `{day, weekday, text}[]`.
+7. Sidecar returns a **draft** extraction (JSON matching the contract). **Nothing is saved yet.**
+8. **Review screen**: draft overlaid on the photo; user corrects errors (including any habit names the LLM misread); the red-line cross-check highlights suspect days.
+9. On confirm → sidecar writes to SQLite (idempotent on `(year, month, day)`), and archives the raw photo + raw extraction JSON.
+10. Dashboard + insights read from SQLite.
 
-**Local-first & private:** the only network call is the vision LLM for notes. Keep it isolated behind an interface so it can later be swapped for a local model or disabled (notes become photo-only).
+**Local-first & private:** the only network calls are the vision-LLM steps (habit labels now, notes in Phase 2). Keep them isolated behind an interface so they can later be swapped for a local model or disabled (labels typed in review, notes photo-only).
 
 ---
 
@@ -114,9 +127,12 @@ Getting the domain right eliminates whole features:
 `pipeline/` is a **pure module** with a plain function interface and **no knowledge of HTTP, Tauri, or the UI**:
 
 ```python
-extract(image_bytes, template_spec) -> Extraction   # image -> structured draft
-commit(extraction, db) -> MonthRecord                # draft -> persisted rows
+extract(image_bytes, grid_config, label_reader) -> Extraction  # image -> structured draft
+commit(extraction, db) -> MonthRecord                          # draft -> persisted rows
 ```
+`grid_config` holds non-habit settings (days=31, orientation, thresholds); habits are read
+from the image. `label_reader` is the injected, swappable vision-LLM interface (the only
+egress) — stubbed in tests, disable-able for offline/local-first.
 
 - `api/` is a thin FastAPI wrapper that calls these.
 - This is what makes "start on Streamlit, move to Tauri" (or add a CLI) cost nothing later. **Never leak framework concerns into `pipeline/`.**
@@ -148,14 +164,25 @@ Everything derived (daily totals, monthly %, streaks, correlations) is **compute
 
 ---
 
-## 7. Paper Template (co-designed analog side)
+## 7. Analog side (unchanged — no template) ~~Paper Template~~
 
-The software depends on the paper being machine-readable. Treat the template as a project deliverable (`docs/paper-template.md` + a printable). Requirements:
+> **Superseded by the Revision note.** The original plan co-designed a printable form with
+> fiducials; Moha keeps the **existing hand-drawn journal as-is**. The software adapts to the
+> photo instead of the paper adapting to the software. Kept below as rationale for *why the
+> pipeline is heuristic + review-first*, not as a deliverable.
 
-- **Four corner fiducials** (ArUco markers or bold registration crosses) → deterministic perspective correction. This alone removes most angled-photo pain.
-- **Fixed grid geometry** month to month → cell coordinates become constants, not something re-detected each import.
-- **A small box to write the Sleep number** next to the chart → OCR two digits instead of digitizing a hand-drawn line. Keep drawing the line too (it's nice, and it's the QA signal for totals).
-- Keep the ritual beautiful — it just also happens to be a form.
+Consequences of having **no** template/fiducials (drove spec 004):
+
+- **No corner fiducials** → the grid is located from its own **saturated green/red block**
+  (largest color blob → contour → 4 corners → perspective warp). Residual spine-curvature is
+  accepted and fixed in review.
+- **No fixed grid geometry** → cell coordinates are **derived per image** (rectified rectangle
+  sliced by CV-counted rows × 31 days), not stored constants.
+- **Habit labels are handwritten and change monthly** → read per import by the vision-LLM
+  (§10 division of labor), with a manual fallback.
+- **Sleep** is entered in the review UI for now (OCR of the written number is a later upgrade;
+  the drawn Total line stays a QA signal for grid totals).
+- The ritual stays exactly as it is — the software does the adapting.
 
 ---
 
@@ -178,11 +205,12 @@ The software depends on the paper being machine-readable. Treat the template as 
 
 ### Phase 1 — MVP (the 20% that delivers 80%)
 Grid → dashboard. Almost entirely deterministic; a weekend-sized build.
-- Scaffold the monorepo, Tauri app, Python sidecar (hello-world over HTTP).
-- Define the extraction **contract** (Pydantic + TS mirror).
-- SQLite **schema + migrations**.
-- **Grid extraction** (fiducial registration → HSV cell classifier) with **golden-image tests**.
-- **Review & correct** screen (draft over photo; edit cells).
+- Scaffold the monorepo, Tauri app, Python sidecar (hello-world over HTTP). ✅ spec 001
+- Define the extraction **contract** (Pydantic + TS mirror). ✅ spec 002
+- SQLite **schema + migrations**. ✅ spec 003
+- **Grid extraction** (color-block localization → CV row count → HSV cell classifier) with
+  **golden classifier tests**; **habit labels** read per month via the vision-LLM. spec 004
+- **Review & correct** screen (draft over photo; edit cells, habit names, and sleep).
 - **Dashboard**: heatmap (recreate the paper grid), monthly %, per-habit streaks, daily totals, **red-line cross-check** flag.
 - Sleep + notes entered **manually** for now.
 
@@ -204,7 +232,7 @@ Grid → dashboard. Almost entirely deterministic; a weekend-sized build.
 **Architecture**
 - Keep `pipeline/` pure and shell-agnostic (§5). No HTTP/Tauri imports in it, ever.
 - The Pydantic contract is the only cross-boundary agreement. Version it; changes are deliberate.
-- Determinism first: use **CV for anything structured** (the grid), **LLM only for free-form handwriting** (notes). Never ask the LLM to count grid cells.
+- Determinism first: use **CV for anything structured** (locating/rectifying the grid, classifying cells), **LLM only for free-form handwriting** (habit labels, notes). **Never ask the LLM to count grid cells.** Grid dimensions come from reliable sources, not fragile CV aspect estimates: the **day count** is user-set (defaults to month length) and the **habit-row count** follows from the labels read (one label per row).
 
 **Reliability**
 - **Human-in-the-loop is mandatory.** Never auto-commit an extraction. The review screen is a core feature, not a nicety.
@@ -235,15 +263,15 @@ habit-chronicle/
       src-tauri/           # Rust host, sidecar config
   services/
     pipeline/
-      pipeline/            # PURE module: registration, grid, sleep, notes, contract
+      pipeline/            # PURE module: grid, labels, sleep, notes, contract
       api/                 # FastAPI wrapper
       db/                  # SQLite access + migrations
       tests/
         golden/            # sample photos + expected JSON
   specs/                   # NNN-slug.md, the SDD memory
   docs/
-    design-guidelines.md   # ← I will provide this (see §12)
-    paper-template.md
+    design_system/         # direction 2a (Grand Hotel + Lato); tokens.css + references
+    samplePhoto/           # real hand-drawn spreads used as CV/label ground truth
   CLAUDE.md                # this file
 ```
 
@@ -251,17 +279,21 @@ habit-chronicle/
 
 ## 12. Design Guidelines
 
-> **PLACEHOLDER — to be filled in by me (Moha).** See `docs/design-guidelines.md`.
-> The frontend must follow that document for color, typography, spacing, and component style. Until it exists, do not invent a visual identity — scaffold with neutral, unstyled components and leave styling hooks (Tailwind classes centralized) so the design system drops in cleanly. Likely starting point: a violet/gold, Strava-inspired system consistent with my other work, but treat the design doc as authoritative once provided.
+> **Provided.** The design system lives in `docs/design_system/` — **direction 2a**: warm
+> paper surfaces, **Grand Hotel** (display) + **Lato** (body), green `#6fa86a` (done), red for
+> missed, blue `#4a86c4` (sleep), orange `#e8843c` (flag/selection); no shadows, warm borders.
+> `tokens.css` holds the `--hc-*` custom properties (the single source of truth — the frontend
+> imports it) and `MonthPanel.dc.html` is the 2a dashboard reference. **Do not invent
+> colors/fonts** — pull from the tokens. (The earlier violet/gold idea is dropped.)
 
 ---
 
 ## 13. First Tasks for Claude Code
 
-Do these in order, spec-first:
-1. Write `specs/001-monorepo-scaffold.md`, then scaffold `apps/desktop` (Tauri v2 + React + TS + Tailwind) and `services/pipeline` (FastAPI + PyInstaller sidecar) with a working health-check round-trip: React → sidecar → `{status: "ok"}`.
-2. Write `specs/002-extraction-contract.md`; implement `pipeline/contract.py` (Pydantic) + the mirrored TS types.
-3. Write `specs/003-data-model.md`; implement the SQLite schema + first migration + `db/` access layer.
-4. Write `specs/004-grid-extraction.md`; implement fiducial registration + HSV grid classifier; add golden-image tests. **Stop at the phase gate for review before Phase 2.**
+Do these in order, spec-first (specs live in `docs/specs/`):
+1. ✅ `001-monorepo-scaffold.md` — `apps/desktop` (Tauri v2 + React + TS + Tailwind) and `services/pipeline` (FastAPI sidecar) with a health-check round-trip: React → sidecar → `{status: "ok"}`. **Done.**
+2. ✅ `002-extraction-contract.md` — `pipeline/contract.py` (Pydantic) + mirrored TS types. **Done.**
+3. ✅ `003-data-model.md` — SQLite schema + first migration + `db/` access layer. **Done.**
+4. `004-grid-extraction.md` — color-block localization + CV row count + HSV grid classifier + per-month habit-label reading (vision-LLM, swappable, stubbed in tests); golden classifier tests. **Stop at the phase gate for review before Phase 2.**
 
-Ask me for the design guidelines and a sample photo (with the new fiducial template) before building the review screen or dashboard.
+Design guidelines are in `docs/design_system/` (direction 2a). Sample spreads are in `docs/samplePhoto/`. Ask Moha for an Anthropic API key (stored in the OS keychain) before running the real label reader.

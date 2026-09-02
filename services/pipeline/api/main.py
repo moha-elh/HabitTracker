@@ -1,19 +1,31 @@
 """FastAPI wrapper — the thin HTTP layer (CLAUDE.md §5).
 
-Only concern in spec 001: the health-check contract. Domain routes are added in
-later specs and delegate to the pure ``pipeline`` package.
+Serves the health probe (spec 001) and the extract/commit routes (spec 005). Routes only
+compose: build the LabelReader, open the DB, and delegate to the pure ``pipeline`` package.
 """
 
 from __future__ import annotations
 
 import argparse
+import base64
 import os
+from calendar import monthrange
 
 import uvicorn
-from fastapi import FastAPI
+from dotenv import load_dotenv
+from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 
+from db import store
+from pipeline.contract import Extraction
+from pipeline.grid import GridConfig, GridNotFound, extract
+from pipeline.labels import LabelReader
+from readers import from_env
+
+load_dotenv()  # makes GEMNINI_KEY / LABEL_READER_* available to the reader
+
 DEFAULT_PORT = 8756
+DB_PATH = os.environ.get("HC_DB_PATH", "habit.db")
 
 app = FastAPI(title="Habit Chronicle sidecar", version="0.1.0")
 
@@ -27,11 +39,69 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# --- injectable composition (overridden in tests: stub reader + in-memory DB) ---
+_conn = None
+
+
+def get_conn():
+    global _conn
+    if _conn is None:
+        _conn = store.connect(DB_PATH)
+        store.migrate(_conn)
+    return _conn
+
+
+def get_reader() -> LabelReader:
+    return from_env()
+
 
 @app.get("/health")
 def health() -> dict[str, str]:
     """Liveness probe. The frontend renders ``status`` verbatim (spec 001)."""
     return {"status": "ok"}
+
+
+@app.post("/extract")
+def extract_route(
+    year: int = Form(...),
+    month: int = Form(...),
+    image: UploadFile = File(...),
+    days: int | None = Form(None),  # grid column count; defaults to the month's length
+    flip_habits: bool = Form(False),  # reverse habit-row order (rotated photos read inverted)
+    reader: LabelReader = Depends(get_reader),
+) -> dict:
+    """Photo → draft Extraction + the rectified grid image (for the review overlay)."""
+    cols = days or monthrange(year, month)[1]
+    try:
+        result = extract(
+            image.file.read(),
+            GridConfig(year=year, month=month, days=cols, flip_habits=flip_habits),
+            reader,
+        )
+    except GridNotFound as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    return {
+        "extraction": result.extraction.model_dump(mode="json"),
+        "rows": result.rows,
+        "rectified_png_b64": base64.b64encode(result.rectified_png).decode(),
+    }
+
+
+@app.post("/commit")
+def commit_route(extraction: Extraction, conn=Depends(get_conn)) -> dict:
+    """Persist a (reviewed) Extraction. Idempotent on (year, month) — spec 003."""
+    try:
+        rec = store.commit_extraction(conn, extraction)
+    except ValueError as e:  # calendar validity etc.
+        raise HTTPException(status_code=422, detail=str(e))
+    return {
+        "month_id": rec.month_id,
+        "year": rec.year,
+        "month": rec.month,
+        "entries": rec.entries,
+        "metrics": rec.metrics,
+        "moments": rec.moments,
+    }
 
 
 def _resolve_port() -> int:

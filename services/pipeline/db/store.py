@@ -73,7 +73,10 @@ class MonthRecord:
 
 
 def connect(path: str) -> sqlite3.Connection:
-    conn = sqlite3.connect(path)
+    # check_same_thread=False: FastAPI runs sync routes in a threadpool, so the single
+    # connection is reused across threads. Safe here — single-user, single writer (§3), rare
+    # writes; sqlite's own locking covers the rest.
+    conn = sqlite3.connect(path, check_same_thread=False)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
     return conn

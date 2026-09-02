@@ -212,11 +212,11 @@ Grid → dashboard. Almost entirely deterministic; a weekend-sized build.
   **golden classifier tests**; **habit labels** read per month via the vision-LLM. spec 004
 - **Review & correct** screen (draft over photo; edit cells, habit names, and sleep).
 - **Dashboard**: heatmap (recreate the paper grid), monthly %, per-habit streaks, daily totals. ✅ spec 007 (red-line cross-check deferred — the drawn total line isn't extracted yet).
-- Sleep + notes entered **manually** for now.
+- Sleep + notes entered **manually** for now. ✅ notes spec 008, sleep spec 009 (both in the review screen → committed → dashboard).
 
 ### Phase 2 — Full extraction
 - **Sleep** OCR from the written number box.
-- **Notes** via vision LLM → review UI (assume ~80% accuracy; make correction fast).
+- **Notes** via vision LLM → review UI (assume ~80% accuracy; make correction fast). ✅ spec 008 (two-image import: grid + memorable-moments page; moments read + editable in review + committed).
 - Multilingual handling (EN/FR/Darija transliteration).
 
 ### Phase 3 — Intelligence

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import logging
 import os
 from calendar import monthrange
 
@@ -20,7 +21,8 @@ from db import store
 from pipeline.contract import Extraction
 from pipeline.grid import GridConfig, GridNotFound, extract
 from pipeline.labels import LabelReader
-from readers import from_env
+from pipeline.notes import MomentsReader
+from readers import from_env, moments_from_env
 
 load_dotenv()  # makes GEMNINI_KEY / LABEL_READER_* available to the reader
 
@@ -55,6 +57,10 @@ def get_reader() -> LabelReader:
     return from_env()
 
 
+def get_moments_reader() -> MomentsReader:
+    return moments_from_env()
+
+
 @app.get("/health")
 def health() -> dict[str, str]:
     """Liveness probe. The frontend renders ``status`` verbatim (spec 001)."""
@@ -68,9 +74,11 @@ def extract_route(
     image: UploadFile = File(...),
     days: int | None = Form(None),  # grid column count; defaults to the month's length
     flip_habits: bool = Form(False),  # reverse habit-row order (rotated photos read inverted)
+    moments_image: UploadFile | None = File(None),  # optional left-page "memorable moments"
     reader: LabelReader = Depends(get_reader),
+    moments_reader: MomentsReader = Depends(get_moments_reader),
 ) -> dict:
-    """Photo → draft Extraction + the rectified grid image (for the review overlay)."""
+    """Grid photo (+ optional moments photo) → draft Extraction + the reference grid image."""
     cols = days or monthrange(year, month)[1]
     try:
         result = extract(
@@ -80,9 +88,31 @@ def extract_route(
         )
     except GridNotFound as e:
         raise HTTPException(status_code=422, detail=str(e))
+
+    ex = result.extraction
+    moments_status = "no image"
+    if moments_image is not None:
+        last = monthrange(year, month)[1]
+        seen: set[int] = set()
+        moments: list[dict] = []
+        try:
+            for m in moments_reader.read(moments_image.file.read()):
+                day = m["day"]
+                if day in seen or day > last:  # dedupe + drop out-of-month so /commit won't reject
+                    continue
+                seen.add(day)
+                moments.append({"day": day, "text": m["text"]})
+            moments_status = f"read {len(moments)}" if moments else "no moments read"
+        except Exception as e:  # a reader/LLM failure must not lose the grid extract
+            logging.getLogger("hc.extract").warning("moments read failed: %s", e)
+            moments_status = f"error: {e}"
+        if moments:  # re-validate through the contract (uniqueness, non-blank text)
+            ex = Extraction.model_validate({**ex.model_dump(), "moments": moments})
+
     return {
-        "extraction": result.extraction.model_dump(mode="json"),
+        "extraction": ex.model_dump(mode="json"),
         "rows": result.rows,
+        "moments_status": moments_status,
         "rectified_png_b64": base64.b64encode(result.rectified_png).decode(),
         "reference_png_b64": base64.b64encode(result.reference_png).decode(),
     }

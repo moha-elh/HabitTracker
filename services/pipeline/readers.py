@@ -25,6 +25,7 @@ import httpx
 import numpy as np
 
 from pipeline.labels import LabelReader, NullLabelReader
+from pipeline.notes import MomentsReader, NullMomentsReader
 
 _DEFAULT_BASE = "https://generativelanguage.googleapis.com/v1beta/openai"
 # Lite flash is fast enough on the free tier and reads handwriting well; heavier flash models
@@ -32,48 +33,64 @@ _DEFAULT_BASE = "https://generativelanguage.googleapis.com/v1beta/openai"
 _DEFAULT_MODEL = "gemini-flash-lite-latest"
 _MAX_DIM = 1024  # downscale big photos → faster calls, smaller payload
 
-_PROMPT = (
+_LABEL_PROMPT = (
     "This image is a hand-drawn monthly habit tracker. Read ALL the habit row labels "
     "(handwritten, one per row, top to bottom; some may be rotated 90°). "
     "Return ONLY a JSON array of strings, one per row in top-to-bottom order, no extra text. "
     "Include every row — the array length must equal the number of habit rows."
 )
 
+_MOMENTS_PROMPT = (
+    "This image is the left page of a handwritten monthly journal: 'Memorable Moments', "
+    "one short line per day, numbered or dated by day of the month. The text may mix English, "
+    "French and Darija (Moroccan Arabic written in Latin letters). Read each day's line VERBATIM. "
+    'Return ONLY a JSON array of objects [{"day": <1-31 integer>, "text": <string>}], in '
+    "ascending day order, no extra text. Skip days with no writing."
+)
+
+
+def _vision_call(base_url: str, model: str, api_key: str, prompt: str, image_png: bytes, timeout: float) -> str:
+    """One OpenAI-compatible vision chat call → the reply text. Retries transient 429/503."""
+    b64 = base64.b64encode(_downscale_jpeg(image_png)).decode()
+    payload = {
+        "model": model,
+        "temperature": 0,
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": prompt},
+                    {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}},
+                ],
+            }
+        ],
+    }
+    url = f"{base_url.rstrip('/')}/chat/completions"
+    headers = {"Authorization": f"Bearer {api_key}"}
+    for attempt in range(4):  # free tiers throttle: back off on 429/503
+        resp = httpx.post(url, json=payload, headers=headers, timeout=timeout)
+        if resp.status_code in (429, 503) and attempt < 3:
+            time.sleep(2 * (attempt + 1))
+            continue
+        break
+    resp.raise_for_status()
+    return resp.json()["choices"][0]["message"]["content"]
+
 
 class OpenAICompatLabelReader:
     def __init__(self, base_url: str, model: str, api_key: str, timeout: float = 120.0):
-        self.base_url = base_url.rstrip("/")
-        self.model = model
-        self.api_key = api_key
-        self.timeout = timeout
+        self.base_url, self.model, self.api_key, self.timeout = base_url, model, api_key, timeout
 
     def read(self, image_png: bytes) -> list[str]:
-        b64 = base64.b64encode(_downscale_jpeg(image_png)).decode()
-        payload = {
-            "model": self.model,
-            "temperature": 0,
-            "messages": [
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "text", "text": _PROMPT},
-                        {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}},
-                    ],
-                }
-            ],
-        }
-        url = f"{self.base_url}/chat/completions"
-        headers = {"Authorization": f"Bearer {self.api_key}"}
-        # Free tiers throttle: retry transient 429/503 with backoff.
-        for attempt in range(4):
-            resp = httpx.post(url, json=payload, headers=headers, timeout=self.timeout)
-            if resp.status_code in (429, 503) and attempt < 3:
-                time.sleep(2 * (attempt + 1))
-                continue
-            break
-        resp.raise_for_status()
-        content = resp.json()["choices"][0]["message"]["content"]
-        return _parse_labels(content)
+        return _parse_labels(_vision_call(self.base_url, self.model, self.api_key, _LABEL_PROMPT, image_png, self.timeout))
+
+
+class OpenAICompatMomentsReader:
+    def __init__(self, base_url: str, model: str, api_key: str, timeout: float = 120.0):
+        self.base_url, self.model, self.api_key, self.timeout = base_url, model, api_key, timeout
+
+    def read(self, image_png: bytes) -> list[dict]:
+        return _parse_moments(_vision_call(self.base_url, self.model, self.api_key, _MOMENTS_PROMPT, image_png, self.timeout))
 
 
 def _downscale_jpeg(raw: bytes, max_dim: int = _MAX_DIM) -> bytes:
@@ -102,10 +119,49 @@ def _parse_labels(text: str) -> list[str]:
     return [ln.strip(" -*\t") for ln in text.splitlines() if ln.strip()]
 
 
-def from_env() -> LabelReader:
+def _parse_moments(text: str) -> list[dict]:
+    """Pull a JSON array of {day, text} out of the reply; drop malformed/blank/out-of-range.
+    Tolerant: strips code fences, accepts a wrapping object, day as '12'/'12th'/'March 12',
+    and text under common alternate keys."""
+    m = re.search(r"\[.*\]", text, re.DOTALL)  # the array, even inside ```json fences / an object
+    if not m:
+        return []
+    try:
+        arr = json.loads(m.group(0))
+    except json.JSONDecodeError:
+        return []
+    out: list[dict] = []
+    for item in arr:
+        if not isinstance(item, dict):
+            continue
+        digits = re.search(r"\d{1,2}", str(item.get("day", "")))
+        if not digits:
+            continue
+        day = int(digits.group(0))
+        txt = str(item.get("text") or item.get("moment") or item.get("note") or item.get("line") or "").strip()
+        if txt and 1 <= day <= 31:
+            out.append({"day": day, "text": txt})
+    return out
+
+
+def _key() -> str | None:
     key = os.getenv("LABEL_READER_API_KEY") or os.getenv("GEMNINI_KEY")
-    if not key or not key.strip():
+    return key.strip() if key and key.strip() else None
+
+
+def from_env() -> LabelReader:
+    key = _key()
+    if not key:
         return NullLabelReader()
     base = os.getenv("LABEL_READER_BASE_URL", _DEFAULT_BASE)
     model = os.getenv("LABEL_READER_MODEL", _DEFAULT_MODEL)
-    return OpenAICompatLabelReader(base, model, key.strip())
+    return OpenAICompatLabelReader(base, model, key)
+
+
+def moments_from_env() -> MomentsReader:
+    key = _key()
+    if not key:
+        return NullMomentsReader()
+    base = os.getenv("LABEL_READER_BASE_URL", _DEFAULT_BASE)
+    model = os.getenv("MOMENTS_READER_MODEL", os.getenv("LABEL_READER_MODEL", _DEFAULT_MODEL))
+    return OpenAICompatMomentsReader(base, model, key)

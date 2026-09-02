@@ -3,9 +3,10 @@ import numpy as np
 import pytest
 from fastapi.testclient import TestClient
 
-from api.main import app, get_conn, get_reader
+from api.main import app, get_conn, get_moments_reader, get_reader
 from db import store
 from pipeline.labels import StubLabelReader
+from pipeline.notes import StubMomentsReader
 
 ROWS, COLS, CELL = 6, 31, 16
 
@@ -99,3 +100,31 @@ def test_months_list_and_load(client):
 
 def test_load_uncommitted_month_is_404(client):
     assert client.get("/months/2099/1").status_code == 404
+
+
+def test_extract_with_moments_image(client):
+    # April has 30 days; day 99 must be dropped, day 12 kept.
+    app.dependency_overrides[get_moments_reader] = lambda: StubMomentsReader(
+        [{"day": 12, "text": "Visited the mosque."}, {"day": 99, "text": "impossible day"}]
+    )
+    r = client.post(
+        "/extract",
+        data={"year": 2026, "month": 4},
+        files={
+            "image": ("g.png", _synthetic_png(), "image/png"),
+            "moments_image": ("m.png", _synthetic_png(), "image/png"),
+        },
+    )
+    assert r.status_code == 200
+    moments = r.json()["extraction"]["moments"]
+    assert moments == [{"day": 12, "weekday": None, "text": "Visited the mosque.", "lang": None}]
+
+
+def test_extract_without_moments_image_has_none(client):
+    r = client.post(
+        "/extract",
+        data={"year": 2026, "month": 8},
+        files={"image": ("g.png", _synthetic_png(), "image/png")},
+    )
+    assert r.status_code == 200
+    assert r.json()["extraction"]["moments"] == []

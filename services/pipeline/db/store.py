@@ -136,6 +136,63 @@ def commit_extraction(
     return MonthRecord(month_id, ex.year, ex.month, n_entries, n_metrics, len(ex.moments))
 
 
+def list_months(conn: sqlite3.Connection) -> list[dict]:
+    """Committed months, newest first, with a marked-cell count (spec 007)."""
+    rows = conn.execute(
+        """
+        SELECT m.year, m.month, m.imported_at,
+               (SELECT COUNT(*) FROM entries e WHERE e.month_id = m.id) AS entries
+        FROM months m
+        ORDER BY m.year DESC, m.month DESC
+        """
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def load_month(conn: sqlite3.Connection, year: int, month: int) -> dict | None:
+    """Full month payload for the dashboard, or None if the month isn't committed (spec 007).
+    Habits are those that appear in this month's entries (month↔habit link is only via entries)."""
+    m = conn.execute(
+        "SELECT id FROM months WHERE year = ? AND month = ?", (year, month)
+    ).fetchone()
+    if m is None:
+        return None
+    mid = m["id"]
+    habits = conn.execute(
+        """
+        SELECT DISTINCT h.name, h.kind, h.sort_order
+        FROM entries e JOIN habits h ON h.id = e.habit_id
+        WHERE e.month_id = ?
+        ORDER BY h.sort_order
+        """,
+        (mid,),
+    ).fetchall()
+    entries = conn.execute(
+        """
+        SELECT e.day, h.name AS habit, e.done
+        FROM entries e JOIN habits h ON h.id = e.habit_id
+        WHERE e.month_id = ?
+        ORDER BY h.sort_order, e.day
+        """,
+        (mid,),
+    ).fetchall()
+    sleep = conn.execute(
+        "SELECT day, sleep_hours AS hours FROM metrics WHERE month_id = ? ORDER BY day", (mid,)
+    ).fetchall()
+    moments = conn.execute(
+        "SELECT day, weekday, text FROM moments WHERE month_id = ? ORDER BY day", (mid,)
+    ).fetchall()
+    return {
+        "year": year,
+        "month": month,
+        "days": calendar.monthrange(year, month)[1],
+        "habits": [dict(h) for h in habits],
+        "entries": [dict(e) for e in entries],
+        "sleep": [dict(s) for s in sleep],
+        "moments": [dict(x) for x in moments],
+    }
+
+
 def _check_calendar(ex: Extraction) -> None:
     last = calendar.monthrange(ex.year, ex.month)[1]
     days = {c.day for c in ex.cells} | {s.day for s in ex.sleep} | {m.day for m in ex.moments}

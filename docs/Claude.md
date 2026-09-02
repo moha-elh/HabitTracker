@@ -211,7 +211,7 @@ Grid → dashboard. Almost entirely deterministic; a weekend-sized build.
 - **Grid extraction** (color-block localization → CV row count → HSV cell classifier) with
   **golden classifier tests**; **habit labels** read per month via the vision-LLM. spec 004
 - **Review & correct** screen (draft over photo; edit cells, habit names, and sleep).
-- **Dashboard**: heatmap (recreate the paper grid), monthly %, per-habit streaks, daily totals, **red-line cross-check** flag.
+- **Dashboard**: heatmap (recreate the paper grid), monthly %, per-habit streaks, daily totals. ✅ spec 007 (red-line cross-check deferred — the drawn total line isn't extracted yet).
 - Sleep + notes entered **manually** for now.
 
 ### Phase 2 — Full extraction

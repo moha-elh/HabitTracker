@@ -79,3 +79,23 @@ def test_commit_calendar_invalid_is_422(client):
     # April has 30 days; day 31 passes the contract but fails commit-time validation.
     bad = _extraction(month=4, cells=[{"day": 31, "habit": "Read", "status": "done"}])
     assert client.post("/commit", json=bad).status_code == 422
+
+
+def test_months_list_and_load(client):
+    client.post("/commit", json=_extraction(cells=[
+        {"day": 1, "habit": "Read", "status": "done"},
+        {"day": 2, "habit": "Read", "status": "missed"},
+    ]))
+    months = client.get("/months").json()
+    assert months and months[0]["year"] == 2026 and months[0]["month"] == 8
+    assert months[0]["entries"] == 2
+
+    data = client.get("/months/2026/8").json()
+    assert data["days"] == 31
+    assert [h["name"] for h in data["habits"]] == ["Read"]
+    got = {(e["day"], e["done"]) for e in data["entries"]}
+    assert got == {(1, 1), (2, 0)}
+
+
+def test_load_uncommitted_month_is_404(client):
+    assert client.get("/months/2099/1").status_code == 404

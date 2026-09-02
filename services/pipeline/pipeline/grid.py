@@ -46,8 +46,9 @@ class GridConfig:
 @dataclass
 class ExtractResult:
     extraction: Extraction
-    rectified_png: bytes  # for the review overlay; not persisted
+    rectified_png: bytes  # tight grid used for slicing; for the review overlay, not persisted
     rows: int
+    reference_png: bytes = b""  # wider crop that keeps the handwritten name margin (display only)
     flags: list = field(default_factory=list)
 
 
@@ -104,7 +105,7 @@ def _main_band(density: np.ndarray, frac: float = 0.25) -> tuple[int, int]:
     return best_start, best_start + best_len
 
 
-def _locate_and_rectify(bgr: np.ndarray, min_area_frac: float) -> np.ndarray:
+def _locate_and_rectify(bgr: np.ndarray, min_area_frac: float) -> tuple[np.ndarray, np.ndarray]:
     green, red = _masks(bgr)
     mask = cv2.morphologyEx(green | red, cv2.MORPH_CLOSE, np.ones((9, 9), np.uint8))
     contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
@@ -134,7 +135,13 @@ def _locate_and_rectify(bgr: np.ndarray, min_area_frac: float) -> np.ndarray:
     x0, x1 = _main_band(m.sum(axis=0).astype(np.float64))
     if y1 - y0 < 10 or x1 - x0 < 10:
         raise GridNotFound("grid band too small after deskew")
-    return rot[y0:y1, x0:x1]
+    rect = rot[y0:y1, x0:x1]  # tight color block — used for cell slicing
+    # Display-only reference: same grid rows (y-band drops the charts above) but extend left to
+    # x=0 so the handwritten habit names in the margin are visible for review.
+    # ponytail: name margin assumed on the low-x side of the deskewed grid (Moha's journal
+    # layout); revisit if a future photo puts names on the right.
+    reference = rot[y0:y1, 0:x1]
+    return rect, reference
 
 
 def _unique_names(labels: list[str], rows: int) -> list[str]:
@@ -157,7 +164,7 @@ def extract(image_bytes: bytes, config: GridConfig, reader: LabelReader) -> Extr
     if bgr is None:
         raise ValueError("could not decode image")
 
-    rect = _locate_and_rectify(bgr, config.min_area_frac)
+    rect, reference = _locate_and_rectify(bgr, config.min_area_frac)
     h, w = rect.shape[:2]
 
     # Counts come from reliable sources, not fragile CV aspect: rows = the habit labels the
@@ -197,4 +204,11 @@ def extract(image_bytes: bytes, config: GridConfig, reader: LabelReader) -> Extr
         year=config.year, month=config.month, habits=habits, cells=cells, flags=flags
     )
     ok, png = cv2.imencode(".png", rect)
-    return ExtractResult(extraction, png.tobytes() if ok else b"", rows, flags)
+    ok_ref, ref_png = cv2.imencode(".png", reference)
+    return ExtractResult(
+        extraction,
+        png.tobytes() if ok else b"",
+        rows,
+        reference_png=ref_png.tobytes() if ok_ref else b"",
+        flags=flags,
+    )

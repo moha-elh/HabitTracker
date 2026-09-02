@@ -84,7 +84,23 @@ def extract_route(
         "extraction": result.extraction.model_dump(mode="json"),
         "rows": result.rows,
         "rectified_png_b64": base64.b64encode(result.rectified_png).decode(),
+        "reference_png_b64": base64.b64encode(result.reference_png).decode(),
     }
+
+
+@app.get("/months")
+def months_route(conn=Depends(get_conn)) -> list[dict]:
+    """List committed months for the dashboard selector (spec 007)."""
+    return store.list_months(conn)
+
+
+@app.get("/months/{year}/{month}")
+def month_route(year: int, month: int, conn=Depends(get_conn)) -> dict:
+    """Full month payload for the dashboard, or 404 if not committed (spec 007)."""
+    data = store.load_month(conn, year, month)
+    if data is None:
+        raise HTTPException(status_code=404, detail="month not committed")
+    return data
 
 
 @app.post("/commit")

@@ -1,7 +1,7 @@
-@import "tailwindcss";
-
-/* Shared design system — direction 2a (Grand Hotel + Lato). Single source of truth. */
+/* Shared design system — direction 2a (Grand Hotel + Lato). Single source of truth.
+   Imported before tailwind so its own @import (fonts) leads the bundle → no postcss warning. */
 @import "../../../docs/design_system/tokens.css";
+@import "tailwindcss";
 
 body {
   margin: 0;

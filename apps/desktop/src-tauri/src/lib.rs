@@ -22,8 +22,10 @@ fn sidecar_port() -> u16 {
     sidecar_port_value()
 }
 
-/// Dev: run the FastAPI sidecar via `uv` from the pipeline directory.
-// ponytail: dev spawns `uv run`; swap for the PyInstaller-frozen sidecar binary before packaging.
+/// Dev: run the FastAPI sidecar using the uv-managed venv python directly.
+// ponytail: run the venv python (not `uv run`) so the Child handle IS the sidecar and
+// kill-on-exit actually kills it — `uv run` would leave python orphaned as a grandchild.
+// Windows-only venv path; swap for the PyInstaller-frozen sidecar binary before packaging.
 fn spawn_sidecar(port: u16) -> std::io::Result<Child> {
     let pipeline_dir = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("..")
@@ -31,9 +33,10 @@ fn spawn_sidecar(port: u16) -> std::io::Result<Child> {
         .join("..")
         .join("services")
         .join("pipeline");
-    Command::new("uv")
-        .current_dir(pipeline_dir)
-        .args(["run", "python", "-m", "api.main", "--port", &port.to_string()])
+    let python = pipeline_dir.join(".venv").join("Scripts").join("python.exe");
+    Command::new(python)
+        .current_dir(&pipeline_dir)
+        .args(["-m", "api.main", "--port", &port.to_string()])
         .spawn()
 }
 

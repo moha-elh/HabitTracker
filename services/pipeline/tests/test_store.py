@@ -43,9 +43,11 @@ def test_migrate_creates_schema_and_is_idempotent():
         "SELECT name FROM sqlite_master WHERE type='table'"
     )}
     assert {"habits", "months", "entries", "metrics", "moments"} <= tables
-    assert conn.execute("PRAGMA user_version").fetchone()[0] == 1
+    from db.store import MIGRATIONS
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == len(MIGRATIONS)
+    v = conn.execute("PRAGMA user_version").fetchone()[0]
     migrate(conn)  # no-op
-    assert conn.execute("PRAGMA user_version").fetchone()[0] == 1
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == v
 
 
 def test_commit_writes_expected_rows():

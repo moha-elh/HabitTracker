@@ -135,12 +135,14 @@ def _locate_and_rectify(bgr: np.ndarray, min_area_frac: float) -> tuple[np.ndarr
     x0, x1 = _main_band(m.sum(axis=0).astype(np.float64))
     if y1 - y0 < 10 or x1 - x0 < 10:
         raise GridNotFound("grid band too small after deskew")
-    rect = rot[y0:y1, x0:x1]  # tight color block — used for cell slicing
-    # Display-only reference: same grid rows (y-band drops the charts above) but extend left to
-    # x=0 so the handwritten habit names in the margin are visible for review.
+    rect = rot[y0:y1, x0:x1]  # tight color block, used for cell slicing
+    # Display-only reference: extend left to x=0 for the handwritten name margin, and pad the
+    # grid's y-band a little so the top/bottom row labels are not clipped (they overhang the
+    # colored cells). The charts sit well above, so a small pad keeps them out.
     # ponytail: name margin assumed on the low-x side of the deskewed grid (Moha's journal
     # layout); revisit if a future photo puts names on the right.
-    reference = rot[y0:y1, 0:x1]
+    py = int(0.06 * (y1 - y0))
+    reference = rot[max(0, y0 - py) : min(rot.shape[0], y1 + py), 0:x1]
     return rect, reference
 
 

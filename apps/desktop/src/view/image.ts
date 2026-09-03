@@ -5,6 +5,22 @@
 //   0 = as captured · 90 = vertical (names upright along the top, Fajr first) · 180 · 270
 const REF_IMAGE_ROTATION = 90;
 
+/** Auto-orient the reference to portrait (habit names on top, grid below). The grid is taller
+ * than wide (days > habits), so a landscape capture rotates 90° and a portrait one stays put.
+ * Returns the oriented data URL plus the chosen rotation so the review Rotate button can cycle
+ * from it. The remaining 180° ambiguity (names top vs bottom) is left to that manual button. */
+export function orientReference(dataUrl: string): Promise<{ url: string; deg: number }> {
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.onload = async () => {
+      const deg = img.width > img.height ? REF_IMAGE_ROTATION : 0; // landscape → portrait
+      resolve({ url: await buildReference(dataUrl, deg), deg });
+    };
+    img.onerror = () => resolve({ url: dataUrl, deg: 0 });
+    img.src = dataUrl;
+  });
+}
+
 export function buildReference(dataUrl: string, deg: number = REF_IMAGE_ROTATION): Promise<string> {
   const d = ((deg % 360) + 360) % 360;
   return new Promise((resolve) => {

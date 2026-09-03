@@ -215,12 +215,13 @@ Grid → dashboard. Almost entirely deterministic; a weekend-sized build.
 - Sleep + notes entered **manually** for now. ✅ notes spec 008, sleep spec 009 (both in the review screen → committed → dashboard).
 
 ### Phase 2 — Full extraction
-- **Sleep** OCR from the written number box.
+- **Sleep** read from the drawn blue line via the vision LLM. ✅ spec 010 (read from the SAME grid photo, chart beside the grid → per-day hours → editable in review; 1600px read + half-hour rounding, unclear days omitted for hand-correction). (Reading a written number box instead is a later refinement.)
 - **Notes** via vision LLM → review UI (assume ~80% accuracy; make correction fast). ✅ spec 008 (two-image import: grid + memorable-moments page; moments read + editable in review + committed).
 - Multilingual handling (EN/FR/Darija transliteration).
 
 ### Phase 3 — Intelligence
-- **Month-over-month** trends and habit-level history.
+- **Month-over-month** trends and habit-level history. ✅ spec 011 (Trends tab: completion + mean-sleep lines and a per-habit %-by-month table, all deterministic, reusing `monthStats`; no backend/DB change).
+- **Usability batch** ✅ spec 012 (archive source photos → dashboard popup via migration 2 `months.grid_image`/`moments_image`; 3-step review wizard; import thumbnails; dashboard polish; project-wide no-em-dash rule).
 - **Correlations & insights** via LLM over the structured data (my RAG comfort zone). **Frame insights as hypotheses, not conclusions** — with ~31 points/month, correlations are fragile until months accumulate. Deterministic metrics (streaks, completion, trends) are the trustworthy ones early on.
 - **Sentiment / theme extraction** over memorable moments.
 - Optional: gamification layer (XP, streaks-as-quests) consistent with my other projects.

@@ -59,7 +59,23 @@ CREATE TABLE moments (
 );
 """
 
-MIGRATIONS: list[str] = [_SCHEMA_V1]
+# Migration 2: keep the source photos so the dashboard can show them back (spec 012).
+# Stored as self-describing data-URL TEXT (single user, ~12 months/yr).
+# ponytail: data-URL in sqlite; move to on-disk files if the DB ever bloats.
+_SCHEMA_V2 = """
+ALTER TABLE months ADD COLUMN grid_image TEXT;
+ALTER TABLE months ADD COLUMN moments_image TEXT;
+"""
+
+# Migration 3: per-month toys/derivations that live with the month (spec 013).
+# confetti = the silly click counter; ai_review = the cached LLM review markdown (cached so the
+# dashboard and insights page don't re-call the model on every open).
+_SCHEMA_V3 = """
+ALTER TABLE months ADD COLUMN confetti INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE months ADD COLUMN ai_review TEXT;
+"""
+
+MIGRATIONS: list[str] = [_SCHEMA_V1, _SCHEMA_V2, _SCHEMA_V3]
 
 
 @dataclass
@@ -94,14 +110,15 @@ def commit_extraction(
     conn: sqlite3.Connection,
     ex: Extraction,
     *,
-    photo_path: str | None = None,
-    raw_extraction_path: str | None = None,
+    grid_image: str | None = None,
+    moments_image: str | None = None,
     notes_ocr_ok: bool = False,
 ) -> MonthRecord:
-    """Persist an Extraction idempotently. Re-committing a month fully replaces its rows."""
+    """Persist an Extraction idempotently. Re-committing a month fully replaces its rows.
+    Source images (data URLs) are kept; passing None on a re-commit preserves the stored ones."""
     _check_calendar(ex)
     with conn:  # atomic: commit on success, rollback on exception
-        month_id = _upsert_month(conn, ex, photo_path, raw_extraction_path, notes_ocr_ok)
+        month_id = _upsert_month(conn, ex, grid_image, moments_image, notes_ocr_ok)
         habit_ids = _upsert_habits(conn, ex)
         # Delete-then-insert children so a re-import drops stale rows (spec 003 idempotency).
         for table in ("entries", "metrics", "moments"):
@@ -153,7 +170,7 @@ def load_month(conn: sqlite3.Connection, year: int, month: int) -> dict | None:
     """Full month payload for the dashboard, or None if the month isn't committed (spec 007).
     Habits are those that appear in this month's entries (month↔habit link is only via entries)."""
     m = conn.execute(
-        "SELECT id FROM months WHERE year = ? AND month = ?", (year, month)
+        "SELECT id, confetti, ai_review FROM months WHERE year = ? AND month = ?", (year, month)
     ).fetchone()
     if m is None:
         return None
@@ -190,7 +207,46 @@ def load_month(conn: sqlite3.Connection, year: int, month: int) -> dict | None:
         "entries": [dict(e) for e in entries],
         "sleep": [dict(s) for s in sleep],
         "moments": [dict(x) for x in moments],
+        "confetti": m["confetti"],
+        "review": m["ai_review"],  # cached LLM review markdown, or None
     }
+
+
+def get_confetti(conn: sqlite3.Connection, year: int, month: int) -> int | None:
+    """The stored confetti click count, or None if the month isn't committed (spec 013)."""
+    row = conn.execute("SELECT confetti FROM months WHERE year = ? AND month = ?", (year, month)).fetchone()
+    return None if row is None else row["confetti"]
+
+
+def set_confetti(conn: sqlite3.Connection, year: int, month: int, count: int) -> int | None:
+    """Set the confetti count (clamped >= 0). Returns the stored value, or None if uncommitted."""
+    count = max(0, int(count))
+    with conn:
+        cur = conn.execute("UPDATE months SET confetti = ? WHERE year = ? AND month = ?", (count, year, month))
+    return count if cur.rowcount else None
+
+
+def get_review(conn: sqlite3.Connection, year: int, month: int) -> str | None:
+    """The cached LLM review markdown, or None (uncommitted month, or never generated)."""
+    row = conn.execute("SELECT ai_review FROM months WHERE year = ? AND month = ?", (year, month)).fetchone()
+    return None if row is None else row["ai_review"]
+
+
+def set_review(conn: sqlite3.Connection, year: int, month: int, text: str) -> None:
+    """Cache the LLM review markdown for a month (spec 013)."""
+    with conn:
+        conn.execute("UPDATE months SET ai_review = ? WHERE year = ? AND month = ?", (text, year, month))
+
+
+def load_month_images(conn: sqlite3.Connection, year: int, month: int) -> dict | None:
+    """The stored source photos (data URLs) for a month, or None if the month isn't committed.
+    Either value may be None when that page was never uploaded (spec 012)."""
+    row = conn.execute(
+        "SELECT grid_image, moments_image FROM months WHERE year = ? AND month = ?", (year, month)
+    ).fetchone()
+    if row is None:
+        return None
+    return {"grid": row["grid_image"], "moments": row["moments_image"]}
 
 
 def _check_calendar(ex: Extraction) -> None:
@@ -204,26 +260,26 @@ def _check_calendar(ex: Extraction) -> None:
 def _upsert_month(
     conn: sqlite3.Connection,
     ex: Extraction,
-    photo_path: str | None,
-    raw_extraction_path: str | None,
+    grid_image: str | None,
+    moments_image: str | None,
     notes_ocr_ok: bool,
 ) -> int:
     conn.execute(
         """
-        INSERT INTO months(year, month, imported_at, photo_path, raw_extraction_path, notes_ocr_ok)
+        INSERT INTO months(year, month, imported_at, grid_image, moments_image, notes_ocr_ok)
         VALUES(?, ?, ?, ?, ?, ?)
         ON CONFLICT(year, month) DO UPDATE SET
             imported_at = excluded.imported_at,
-            photo_path = excluded.photo_path,
-            raw_extraction_path = excluded.raw_extraction_path,
+            grid_image = COALESCE(excluded.grid_image, months.grid_image),
+            moments_image = COALESCE(excluded.moments_image, months.moments_image),
             notes_ocr_ok = excluded.notes_ocr_ok
         """,
         (
             ex.year,
             ex.month,
             datetime.now(timezone.utc).isoformat(),
-            photo_path,
-            raw_extraction_path,
+            grid_image,
+            moments_image,
             1 if notes_ocr_ok else 0,
         ),
     )

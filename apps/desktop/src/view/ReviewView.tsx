@@ -1,26 +1,82 @@
-// View — the review & correct screen: editable habit×day grid on the left, reference image
-// (croppable) on the right. Cell/name/flip edits go through the pure model/draft helpers.
-import { useMemo } from "react";
+// View — the review & correct screen, a 3-step wizard: (1) fix the habit grid, (2) fix the
+// sleep hours, (3) fix the memorable moments, then commit. Each step keeps the source photo
+// beside it. Cell/name/flip/sleep/moment edits go through the pure model/draft helpers.
+import { useMemo, useState } from "react";
 import type { Draft } from "../model/types";
 import { addMoment, cycleCell, flipDraft, removeMoment, renameHabit, setMomentDay, setMomentText, setSleep } from "../model/draft";
 import { CARD, CELL_BG, LOW_CONF, MONTHS, btnStyle, inputStyle, secondaryBtn } from "./theme";
 import { CropImage } from "./CropImage";
+import { buildReference } from "./image";
+
+const STEPS = ["Habit grid", "Sleep hours", "Memorable moments"] as const;
 
 export function ReviewView(props: { draft: Draft; onChange: (d: Draft) => void; onCommit: () => void; onBack: () => void }) {
   const { draft, onChange } = props;
-  const rows = draft.habits.length;
-  const days = draft.days;
-  const gridCols = useMemo(() => `160px repeat(${days}, 20px)`, [days]);
+  const [step, setStep] = useState(0);
+  const last = STEPS.length - 1;
 
   return (
     <div style={{ display: "grid", gap: 18, width: "100%" }}>
       <div style={{ display: "flex", alignItems: "baseline", gap: 12, flexWrap: "wrap" }}>
         <span style={{ fontFamily: "var(--hc-font-display)", fontSize: 26 }}>{MONTHS[draft.month - 1]} {draft.year}</span>
-        <span style={{ color: "var(--hc-text-muted)", fontSize: 12.5 }}>click a cell: done → missed → empty · orange ring = low confidence</span>
+        <span style={{ color: "var(--hc-text-muted)", fontSize: 12.5 }}>Step {step + 1} of {STEPS.length}: {STEPS[step]}</span>
       </div>
 
+      <Stepper step={step} onGo={setStep} />
+
+      {step === 0 && <GridStep draft={draft} onChange={onChange} />}
+      {step === 1 && <SleepStep draft={draft} onChange={onChange} />}
+      {step === 2 && <MomentsStep draft={draft} onChange={onChange} />}
+
+      <div style={{ display: "flex", gap: 10, marginTop: 4, flexWrap: "wrap" }}>
+        {step === last
+          ? <button style={btnStyle} onClick={props.onCommit}>Commit</button>
+          : <button style={btnStyle} onClick={() => setStep(step + 1)}>Next</button>}
+        <button style={secondaryBtn} onClick={() => (step === 0 ? props.onBack() : setStep(step - 1))}>Back</button>
+      </div>
+    </div>
+  );
+}
+
+/** Clickable step pills showing progress through the wizard. */
+function Stepper(props: { step: number; onGo: (s: number) => void }) {
+  return (
+    <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+      {STEPS.map((name, i) => {
+        const active = i === props.step;
+        const done = i < props.step;
+        return (
+          <button key={name} onClick={() => props.onGo(i)}
+            style={{ ...secondaryBtn, padding: "6px 12px", fontSize: 12.5, fontWeight: active ? 700 : 500,
+              background: active ? "var(--hc-surface-ink)" : done ? "var(--hc-done-tint)" : "var(--hc-surface)",
+              color: active ? "#fff" : done ? "var(--hc-done-text)" : "var(--hc-text-muted)",
+              border: active ? "1px solid var(--hc-surface-ink)" : undefined }}>
+            {i + 1}. {name}{done ? " ✓" : ""}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+/** Step 1: the editable habit×day grid beside the grid reference photo. */
+function GridStep(props: { draft: Draft; onChange: (d: Draft) => void }) {
+  const { draft, onChange } = props;
+  const rows = draft.habits.length;
+  const days = draft.days;
+  const gridCols = useMemo(() => `160px repeat(${days}, 20px)`, [days]);
+
+  // Rotate the reference photo 90° per click (any upload angle → names on top, grid below).
+  async function rotateRef() {
+    const deg = (draft.refDeg + 90) % 360;
+    const url = await buildReference(draft.referenceRaw, deg);
+    onChange({ ...draft, refDeg: deg, rectified: url });
+  }
+
+  return (
+    <div style={{ display: "grid", gap: 12 }}>
+      <span style={{ color: "var(--hc-text-muted)", fontSize: 12.5 }}>click a cell: done → missed → empty · orange ring = low confidence</span>
       <div style={{ display: "flex", gap: 24, alignItems: "flex-start" }}>
-        {/* LEFT column — editable grid, with the action buttons directly under it */}
         <div style={{ flex: "1 1 auto", minWidth: 0 }}>
           <div style={{ overflowX: "auto" }}>
             <div style={{ display: "grid", gridTemplateColumns: gridCols, gap: 3, alignItems: "center" }}>
@@ -35,35 +91,52 @@ export function ReviewView(props: { draft: Draft; onChange: (d: Draft) => void; 
               ))}
             </div>
           </div>
-
-          <div style={{ display: "flex", gap: 10, marginTop: 16, flexWrap: "wrap" }}>
-            <button style={btnStyle} onClick={props.onCommit}>Commit</button>
-            <button style={secondaryBtn} onClick={props.onBack}>Back</button>
+          <div style={{ marginTop: 16, display: "flex", gap: 10, flexWrap: "wrap" }}>
+            <button style={secondaryBtn} onClick={rotateRef} title="Rotate the reference photo so the habit names sit readable on top">
+              Rotate ⟳
+            </button>
             <button style={secondaryBtn} onClick={() => onChange(flipDraft(draft))} title="Reverse habit row order to match the reference image">
               Flip ⇅
             </button>
           </div>
         </div>
 
-        {/* RIGHT column — reference image, click to enlarge & crop */}
         {draft.rectified && (
           <figure style={{ flex: "0 0 auto", margin: 0, position: "sticky", top: 12 }}>
             <CropImage src={draft.rectified} />
-            <figcaption style={{ fontSize: 11.5, color: "var(--hc-text-muted)", marginTop: 6, textAlign: "center" }}>your grid — click to enlarge &amp; crop</figcaption>
+            <figcaption style={{ fontSize: 11.5, color: "var(--hc-text-muted)", marginTop: 6, textAlign: "center" }}>your grid · click to enlarge &amp; crop</figcaption>
           </figure>
         )}
       </div>
-
-      <SleepEditor draft={draft} onChange={onChange} />
-      <MomentsEditor draft={draft} onChange={onChange} />
     </div>
   );
+}
+
+/** Step 2: the per-day sleep hours across the page, with the full grid photo (which holds the
+ * sleep line chart) on the right to read the blue line off. */
+function SleepStep(props: { draft: Draft; onChange: (d: Draft) => void }) {
+  return (
+    <div style={{ display: "flex", gap: 24, alignItems: "flex-start", flexWrap: "wrap", width: "100%" }}>
+      <SleepEditor draft={props.draft} onChange={props.onChange} />
+      {props.draft.gridPhoto && (
+        <figure style={{ flex: "0 0 auto", margin: 0, position: "sticky", top: 12 }}>
+          <CropImage src={props.draft.gridPhoto} />
+          <figcaption style={{ fontSize: 11.5, color: "var(--hc-text-muted)", marginTop: 6, textAlign: "center" }}>read the blue sleep line off this photo</figcaption>
+        </figure>
+      )}
+    </div>
+  );
+}
+
+/** Step 3: the memorable moments across the whole page, no reference image (verified by hand). */
+function MomentsStep(props: { draft: Draft; onChange: (d: Draft) => void }) {
+  return <MomentsEditor draft={props.draft} onChange={props.onChange} />;
 }
 
 function SleepEditor(props: { draft: Draft; onChange: (d: Draft) => void }) {
   const { draft, onChange } = props;
   return (
-    <div style={{ ...CARD, maxWidth: 720 }}>
+    <div style={{ ...CARD, flex: "1 1 420px", minWidth: 0 }}>
       <div style={{ fontSize: 15, fontWeight: 700 }}>Sleep <span style={{ fontSize: 12, fontWeight: 400, color: "var(--hc-text-faint)" }}>hours per night</span></div>
       <div style={{ fontSize: 11.5, color: "var(--hc-text-faint)", marginTop: 2, marginBottom: 12 }}>read the blue line off your photo · leave a day blank for no reading</div>
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, 44px)", gap: 8 }}>
@@ -83,7 +156,7 @@ function SleepEditor(props: { draft: Draft; onChange: (d: Draft) => void }) {
 function MomentsEditor(props: { draft: Draft; onChange: (d: Draft) => void }) {
   const { draft, onChange } = props;
   return (
-    <div style={{ ...CARD, maxWidth: 720 }}>
+    <div style={{ ...CARD, width: "100%" }}>
       <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 12, marginBottom: 12 }}>
         <div>
           <div style={{ fontSize: 15, fontWeight: 700 }}>Memorable moments</div>
@@ -92,7 +165,7 @@ function MomentsEditor(props: { draft: Draft; onChange: (d: Draft) => void }) {
         <button style={{ ...secondaryBtn, padding: "6px 12px", fontSize: 12.5 }} onClick={() => onChange(addMoment(draft))}>+ Add</button>
       </div>
       {draft.moments.length === 0 ? (
-        <div style={{ fontSize: 12.5, color: "var(--hc-text-muted)" }}>No moments — import the left page too, or add lines by hand.</div>
+        <div style={{ fontSize: 12.5, color: "var(--hc-text-muted)" }}>No moments yet. Import the left page too, or add lines by hand.</div>
       ) : (
         <div style={{ display: "grid", gap: 8 }}>
           {draft.moments.map((m, i) => (

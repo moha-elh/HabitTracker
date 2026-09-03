@@ -11,7 +11,11 @@ export type Draft = {
   conf: number[][]; // [row][day-1]
   sleep: (number | null)[]; // hours per night, indexed by day-1; null = no reading
   moments: { day: number; text: string }[]; // memorable moments (left page), editable in review
-  rectified: string; // reference image, data URL
+  rectified: string; // grid reference image (data URL) at the current orientation, archived on commit
+  referenceRaw: string; // the server reference, unrotated, so review can re-orient it freely
+  refDeg: number; // clockwise rotation currently applied to referenceRaw (0/90/180/270)
+  gridPhoto: string; // the full original grid photo (data URL); has the sleep line chart the crop drops
+  momentsImage: string | null; // moments-page photo (data URL), if one was uploaded
 };
 
 /** The controller's screen state machine. */
@@ -21,7 +25,8 @@ export type View =
   | { v: "review"; draft: Draft }
   | { v: "committing"; draft: Draft }
   | { v: "done"; counts: { entries: number; year: number; month: number } }
-  | { v: "dashboard" };
+  | { v: "dashboard" }
+  | { v: "trends" };
 
 /** A committed month as listed by GET /months. */
 export type MonthItem = { year: number; month: number; imported_at: string; entries: number };
@@ -35,4 +40,6 @@ export type MonthData = {
   entries: { day: number; habit: string; done: number }[];
   sleep: { day: number; hours: number }[];
   moments: { day: number; weekday: string | null; text: string }[];
+  confetti: number; // persistent silly click counter (spec 013)
+  review: string | null; // cached LLM review markdown, or null if never generated
 };

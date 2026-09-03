@@ -17,7 +17,7 @@ function uniqueNames(names: string[]): string[] {
   });
 }
 
-export function draftFromExtraction(ex: Extraction, rectified: string, days: number): Draft {
+export function draftFromExtraction(ex: Extraction, rectified: string, days: number, momentsImage: string | null = null): Draft {
   const rows = ex.habits.length;
   const status: CellStatus[][] = Array.from({ length: rows }, () => Array<CellStatus>(days).fill("empty"));
   const conf: number[][] = Array.from({ length: rows }, () => Array<number>(days).fill(1));
@@ -42,7 +42,9 @@ export function draftFromExtraction(ex: Extraction, rectified: string, days: num
   for (const s of ex.sleep) {
     if (s.hours != null && s.day >= 1 && s.day <= days) sleep[s.day - 1] = s.hours;
   }
-  return { year: ex.year, month: ex.month, days, habits, status, conf, sleep, moments, rectified };
+  // referenceRaw/refDeg/gridPhoto default here; App overrides them with the raw server
+  // reference, the auto-chosen orientation, and the full original photo.
+  return { year: ex.year, month: ex.month, days, habits, status, conf, sleep, moments, rectified, referenceRaw: rectified, refDeg: 0, gridPhoto: rectified, momentsImage };
 }
 
 export function toExtraction(d: Draft): Extraction {

@@ -3,14 +3,24 @@ import { useEffect, useState } from "react";
 import type { Draft, View } from "./model/types";
 import { commitExtraction, extractImage } from "./model/api";
 import { draftFromExtraction, toExtraction } from "./model/draft";
-import { buildReference } from "./view/image";
+import { orientReference } from "./view/image";
 import { MONTHS, btnStyle, navBtn, secondaryBtn } from "./view/theme";
 import { ImportView } from "./view/ImportView";
 import { ReviewView } from "./view/ReviewView";
 import { DashboardView } from "./view/Dashboard";
+import { TrendsView } from "./view/Trends";
 
 const daysInMonth = (year: number, month: number) => new Date(year, month, 0).getDate();
 const msg = (e: unknown) => String(e instanceof Error ? e.message : e);
+
+/** Read a picked File into a data URL so it can be archived with the commit. */
+const fileToDataURL = (f: File): Promise<string> =>
+  new Promise((resolve, reject) => {
+    const r = new FileReader();
+    r.onload = () => resolve(r.result as string);
+    r.onerror = () => reject(r.error);
+    r.readAsDataURL(f);
+  });
 
 export default function App() {
   const [view, setView] = useState<View>({ v: "import" });
@@ -29,18 +39,19 @@ export default function App() {
     setError(null);
     setView({ v: "loading" });
     try {
-      const { extraction, referenceB64, momentsStatus } = await extractImage(file, momentsFile, year, month, days);
-      const rectified = await buildReference(`data:image/png;base64,${referenceB64}`);
-      // If a moments image was sent but nothing came back, tell the user why (and that they can
-      // still add lines by hand in review). momentsStatus is "read N" on success.
-      if (momentsFile && !momentsStatus.startsWith("read ")) {
-        setError(
-          momentsStatus === "no image"
-            ? "The sidecar didn't process the moments image — fully restart the app so it picks up the new code."
-            : `Couldn't read moments from that page (${momentsStatus}). Add them by hand below, or try a clearer photo.`,
-        );
-      }
-      setView({ v: "review", draft: draftFromExtraction(extraction, rectified, days) });
+      const { extraction, referenceB64, momentsStatus, sleepStatus } = await extractImage(file, momentsFile, year, month, days);
+      const raw = `data:image/png;base64,${referenceB64}`;
+      const { url: rectified, deg } = await orientReference(raw); // auto-orient to portrait (names on top)
+      const gridPhoto = await fileToDataURL(file); // full photo, keeps the sleep chart the crop drops
+      const momentsImage = momentsFile ? await fileToDataURL(momentsFile) : null;
+      // Surface read problems (fixable by hand in review). Sleep runs on the grid image every
+      // import, so only flag a hard error; moments only when a page was actually provided.
+      const warns: string[] = [];
+      if (momentsFile && !momentsStatus.startsWith("read ")) warns.push(`moments (${momentsStatus})`);
+      if (sleepStatus.startsWith("error:")) warns.push(`sleep (${sleepStatus})`);
+      if (warns.length) setError(`Couldn't read: ${warns.join(", ")}. Fix by hand in review, or try a clearer photo.`);
+      const draft = draftFromExtraction(extraction, rectified, days, momentsImage);
+      setView({ v: "review", draft: { ...draft, referenceRaw: raw, refDeg: deg, gridPhoto } });
     } catch (e) {
       setError(msg(e));
       setView({ v: "import" });
@@ -51,7 +62,10 @@ export default function App() {
     setError(null);
     setView({ v: "committing", draft });
     try {
-      const rec = await commitExtraction(toExtraction(draft));
+      const rec = await commitExtraction(toExtraction(draft), {
+        grid_image: draft.rectified || null,
+        moments_image: draft.momentsImage,
+      });
       setView({ v: "done", counts: { entries: rec.entries, year: rec.year, month: rec.month } });
     } catch (e) {
       setError(msg(e));
@@ -66,10 +80,11 @@ export default function App() {
           Habit Chronicle
         </h1>
 
-        {(view.v === "import" || view.v === "dashboard" || view.v === "done") && (
+        {(view.v === "import" || view.v === "dashboard" || view.v === "trends" || view.v === "done") && (
           <nav style={{ display: "flex", gap: 8, marginBottom: 18 }}>
             <button style={navBtn(view.v === "import")} onClick={() => setView({ v: "import" })}>Import</button>
             <button style={navBtn(view.v === "dashboard")} onClick={() => setView({ v: "dashboard" })}>Dashboard</button>
+            <button style={navBtn(view.v === "trends")} onClick={() => setView({ v: "trends" })}>Trends</button>
           </nav>
         )}
 
@@ -84,17 +99,22 @@ export default function App() {
         )}
         {(view.v === "loading" || view.v === "committing") && (
           <p style={{ color: "var(--hc-text-muted)" }}>
-            {view.v === "loading" ? "extracting — reading the grid and labels (this can take a moment)…" : "saving…"}
+            {view.v === "loading" ? "extracting: reading the grid and labels (this can take a moment)…" : "saving…"}
           </p>
         )}
         {view.v === "review" && (
           <ReviewView draft={view.draft} onChange={(d) => setView({ v: "review", draft: d })} onCommit={() => commit(view.draft)} onBack={() => setView({ v: "import" })} />
         )}
         {view.v === "done" && (
-          <div style={{ textAlign: "center" }}>
-            <p style={{ color: "var(--hc-done-text)", fontWeight: 700 }}>
-              Saved {MONTHS[view.counts.month - 1]} {view.counts.year} — {view.counts.entries} cells persisted.
-            </p>
+          <div style={{ textAlign: "center", background: "var(--hc-surface)", border: "1px solid var(--hc-border)", borderRadius: 18, padding: "40px 48px", maxWidth: 460 }}>
+            <div style={{ width: 64, height: 64, borderRadius: "50%", background: "var(--hc-done-tint)", color: "var(--hc-done-text)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 34, margin: "0 auto 18px" }}>✓</div>
+            <div style={{ fontSize: 11.5, letterSpacing: ".14em", textTransform: "uppercase", color: "var(--hc-text-label)", fontWeight: 700 }}>Saved to your chronicle</div>
+            <div style={{ fontFamily: "var(--hc-font-display)", fontSize: 40, fontWeight: 400, lineHeight: 1.1, margin: "8px 0 6px" }}>
+              {MONTHS[view.counts.month - 1]} {view.counts.year}
+            </div>
+            <div style={{ fontSize: 14, color: "var(--hc-text-muted)", marginBottom: 24 }}>
+              {view.counts.entries} habit cells committed to the dashboard.
+            </div>
             <div style={{ display: "flex", gap: 10, justifyContent: "center" }}>
               <button style={btnStyle} onClick={() => setView({ v: "dashboard" })}>View dashboard</button>
               <button style={secondaryBtn} onClick={() => { setFile(null); setMomentsFile(null); setView({ v: "import" }); }}>Import another</button>
@@ -102,6 +122,7 @@ export default function App() {
           </div>
         )}
         {view.v === "dashboard" && <DashboardView />}
+        {view.v === "trends" && <TrendsView />}
       </div>
     </main>
   );

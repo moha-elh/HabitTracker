@@ -14,9 +14,10 @@ async function detailError(res: Response, fallback: string): Promise<Error> {
   return new Error(typeof detail === "string" ? detail : detail ? JSON.stringify(detail) : `${fallback} (${res.status})`);
 }
 
-export type ExtractResult = { extraction: Extraction; referenceB64: string; momentsStatus: string };
+export type ExtractResult = { extraction: Extraction; referenceB64: string; momentsStatus: string; sleepStatus: string };
 
-/** Grid photo (+ optional moments photo) → draft extraction + the reference image (base64 PNG). */
+/** Grid photo (+ optional moments photo) → draft extraction + reference (base64). Sleep is read
+ * from the grid image itself (its chart sits beside the grid). */
 export async function extractImage(file: File, momentsFile: File | null, year: number, month: number, days: number): Promise<ExtractResult> {
   const form = new FormData();
   form.append("image", file);
@@ -32,19 +33,49 @@ export async function extractImage(file: File, momentsFile: File | null, year: n
   return {
     extraction: body.extraction as Extraction,
     referenceB64: body.reference_png_b64 || body.rectified_png_b64,
-    momentsStatus: body.moments_status ?? "no image", // absent → sidecar predates moments support
+    momentsStatus: body.moments_status ?? "no image", // absent → sidecar predates page reads
+    sleepStatus: body.sleep_status ?? "no image",
   };
 }
 
-/** Persist a reviewed extraction. Idempotent on (year, month). */
-export async function commitExtraction(ex: Extraction): Promise<{ entries: number; year: number; month: number }> {
+/** Persist a reviewed extraction plus the source photos to archive. Idempotent on (year, month). */
+export async function commitExtraction(
+  ex: Extraction,
+  images: { grid_image: string | null; moments_image: string | null } = { grid_image: null, moments_image: null },
+): Promise<{ entries: number; year: number; month: number }> {
   const res = await fetch(`${await apiBase()}/commit`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(ex),
+    body: JSON.stringify({ extraction: ex, ...images }),
   });
   if (!res.ok) throw await detailError(res, "commit failed");
   return res.json();
+}
+
+/** Stored source photos (data URLs) for a committed month; either may be null. */
+export async function fetchMonthImages(year: number, month: number): Promise<{ grid: string | null; moments: string | null }> {
+  const res = await fetch(`${await apiBase()}/months/${year}/${month}/images`);
+  if (!res.ok) throw await detailError(res, "images load failed");
+  return res.json();
+}
+
+/** LLM review + lifestyle advice for a committed month (markdown text). Cached server-side after
+ * the first call; pass refresh to force a regenerate. */
+export async function fetchMonthReview(year: number, month: number, refresh = false): Promise<string> {
+  const res = await fetch(`${await apiBase()}/months/${year}/${month}/review${refresh ? "?refresh=true" : ""}`);
+  if (!res.ok) throw await detailError(res, "review failed");
+  return (await res.json()).review as string;
+}
+
+/** Persist the (absolute) confetti click count for a month; returns the stored value. */
+export async function saveConfetti(year: number, month: number, count: number): Promise<number> {
+  const res = await fetch(`${await apiBase()}/months/${year}/${month}/confetti`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ count }),
+  });
+  if (!res.ok) throw await detailError(res, "confetti save failed");
+  return (await res.json()).count as number;
 }
 
 export async function fetchMonths(): Promise<MonthItem[]> {

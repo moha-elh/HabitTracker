@@ -55,6 +55,36 @@ export type MonthStats = {
   minSleep: { day: number; hours: number } | null;
 };
 
+/** One committed month reduced to its cross-month numbers (spec 011). Reuses monthStats so the
+ *  values match that month's own dashboard panel exactly. */
+export type MonthSummary = {
+  year: number;
+  month: number;
+  completion: number;
+  meanSleep: number | null;
+  bestStreak: number;
+  perHabit: { name: string; pct: number | null }[];
+  activeDays: number;
+};
+
+export function monthSummary(data: MonthData): MonthSummary {
+  const s = monthStats(data, buildMatrix(data));
+  return {
+    year: data.year,
+    month: data.month,
+    completion: s.monthly,
+    meanSleep: s.hasSleep ? s.meanSleep : null,
+    bestStreak: s.best.run.len,
+    perHabit: s.perHabit.map((h) => ({ name: h.name, pct: h.pct })),
+    activeDays: s.dayTotals.filter((t) => t > 0).length,
+  };
+}
+
+/** Summaries for every committed month, sorted chronologically. */
+export function trendSeries(list: MonthData[]): MonthSummary[] {
+  return list.map(monthSummary).sort((a, b) => a.year - b.year || a.month - b.month);
+}
+
 export function monthStats(data: MonthData, status: CellStatus[][]): MonthStats {
   const { days, habits } = data;
   const dayTotals = Array<number>(days).fill(0);

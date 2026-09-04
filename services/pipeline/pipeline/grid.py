@@ -105,6 +105,53 @@ def _main_band(density: np.ndarray, frac: float = 0.25) -> tuple[int, int]:
     return best_start, best_start + best_len
 
 
+def _block_deskew_angle(bgr: np.ndarray, min_area_frac: float) -> float:
+    """Tilt angle (deg) of the colored grid block, normalized to (-45, 45]. Raises GridNotFound if
+    no block. Shared by the grid rectifier and the full-image normalizer so both agree on 'straight'."""
+    green, red = _masks(bgr)
+    mask = cv2.morphologyEx(green | red, cv2.MORPH_CLOSE, np.ones((9, 9), np.uint8))
+    contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    if not contours:
+        raise GridNotFound("no colored region found")
+    block = max(contours, key=cv2.contourArea)
+    if cv2.contourArea(block) < min_area_frac * bgr.shape[0] * bgr.shape[1]:
+        raise GridNotFound("colored region too small to be the grid")
+    angle = cv2.minAreaRect(block)[2]
+    if angle < -45:
+        angle += 90
+    elif angle > 45:
+        angle -= 90
+    return angle
+
+
+def _rotate(bgr: np.ndarray, angle: float) -> np.ndarray:
+    """Rotate about the center, growing the canvas so no content clips at larger tilt angles."""
+    h, w = bgr.shape[:2]
+    m = cv2.getRotationMatrix2D((w / 2, h / 2), angle, 1.0)
+    cos, sin = abs(m[0, 0]), abs(m[0, 1])
+    nw, nh = int(h * sin + w * cos), int(h * cos + w * sin)
+    m[0, 2] += (nw - w) / 2
+    m[1, 2] += (nh - h) / 2
+    return cv2.warpAffine(bgr, m, (nw, nh), borderValue=(255, 255, 255))
+
+
+def normalize_orientation(image_bytes: bytes, min_area_frac: float = 0.05) -> bytes:
+    """Deskew a whole photo so the grid AND everything beside it (labels, sleep chart) sit
+    axis-aligned, regardless of the angle the photo was taken at. Uses the grid block's own tilt
+    (same correction the rectifier applies to the grid) so every AI read gets one canonical
+    orientation. Falls back to the original bytes if the grid block can't be found (e.g. the
+    moments page, which has no colored grid to align to)."""
+    bgr = cv2.imdecode(np.frombuffer(image_bytes, np.uint8), cv2.IMREAD_COLOR)
+    if bgr is None:
+        return image_bytes
+    try:
+        angle = _block_deskew_angle(bgr, min_area_frac)
+    except GridNotFound:
+        return image_bytes
+    ok, png = cv2.imencode(".png", _rotate(bgr, angle))
+    return png.tobytes() if ok else image_bytes
+
+
 def _locate_and_rectify(bgr: np.ndarray, min_area_frac: float) -> tuple[np.ndarray, np.ndarray]:
     green, red = _masks(bgr)
     mask = cv2.morphologyEx(green | red, cv2.MORPH_CLOSE, np.ones((9, 9), np.uint8))

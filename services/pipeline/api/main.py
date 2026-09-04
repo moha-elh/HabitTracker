@@ -25,7 +25,7 @@ from pydantic import BaseModel
 
 from db import store
 from pipeline.contract import Extraction
-from pipeline.grid import GridConfig, GridNotFound, extract
+from pipeline.grid import GridConfig, GridNotFound, extract, normalize_orientation
 from pipeline.labels import LabelReader
 from pipeline.notes import MomentsReader
 from pipeline.sleep import SleepReader
@@ -277,13 +277,18 @@ def extract_route(
     last = monthrange(year, month)[1]
     image_bytes = image.file.read()
     moments_bytes = moments_image.file.read() if moments_image else None
+    # Auto-straighten the photo (cheap CV, done once up front) so EVERY AI read sees one canonical
+    # orientation no matter the angle it was shot at. The grid photo has the colored block to align
+    # to; the moments page has none, so normalize_orientation returns it unchanged.
+    grid_norm = normalize_orientation(image_bytes)
+    moments_norm = normalize_orientation(moments_bytes) if moments_bytes else None
     # The three reads are independent network calls, so fan them out: grid+labels, moments, and
     # sleep run at once and the request waits on the slowest, not the sum. _read_page never raises;
     # only the grid extract can, so its future is what we translate to an HTTP status below.
     with ThreadPoolExecutor(max_workers=3) as pool:
-        fut_grid = pool.submit(extract, image_bytes, GridConfig(year=year, month=month, days=cols, flip_habits=flip_habits), reader)
-        fut_moments = pool.submit(_read_page, moments_reader, moments_bytes, last)
-        fut_sleep = pool.submit(_read_page, sleep_reader, image_bytes, last)  # sleep chart is in the grid image
+        fut_grid = pool.submit(extract, grid_norm, GridConfig(year=year, month=month, days=cols, flip_habits=flip_habits), reader)
+        fut_moments = pool.submit(_read_page, moments_reader, moments_norm, last)
+        fut_sleep = pool.submit(_read_page, sleep_reader, grid_norm, last)  # sleep chart is in the grid image
         try:
             result = fut_grid.result()
         except GridNotFound as e:
@@ -294,7 +299,7 @@ def extract_route(
                 raise HTTPException(status_code=503, detail="The AI vision service is temporarily overloaded. Wait a moment and try extracting again.")
             raise HTTPException(status_code=502, detail=f"AI vision service error ({code}). Try again in a moment.")
         except httpx.RequestError:
-            raise HTTPException(status_code=503, detail="Could not reach the AI vision service. Check your connection and try again.")
+            raise HTTPException(status_code=503, detail="The AI vision service didn't respond in time (it may be busy). Wait a moment and try extracting again, or check your connection.")
         moments, moments_status = fut_moments.result()
         sleep, sleep_status = fut_sleep.result()
 

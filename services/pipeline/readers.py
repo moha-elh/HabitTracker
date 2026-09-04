@@ -82,14 +82,22 @@ _MOMENTS_PROMPT = (
 )
 
 _SLEEP_PROMPT = (
-    "This image shows hand-drawn line charts for one month. Read the BLUE line labelled 'sleep' "
-    "(NOT the red 'total of habits' line). The x-axis is the day of the month (1..31, left to "
-    "right); the y-axis is hours slept, with labelled gridlines (e.g. 2, 4, 6, 8, 10, 12). "
-    "Work day by day: find the blue line's height directly above that day's x-tick, read it "
-    "against the nearest labelled gridlines, and round to the nearest HALF hour. Only include a "
-    "day if a blue point/segment is clearly there; do NOT guess or interpolate across gaps, and "
-    "do NOT invent a smooth trend; an omitted day is better than a wrong one (it is corrected by "
-    "hand afterwards). "
+    "This image shows a hand-drawn chart for one month, drawn SIDEWAYS (transposed). Read the BLUE "
+    "line labelled 'sleep' (NOT the red 'total of habits' line).\n"
+    "AXES (read carefully, this is not a normal chart):\n"
+    "- The HORIZONTAL axis runs along the TOP and is HOURS SLEPT: a numbered scale increasing left "
+    "to right, e.g. 2, 4, 6, 8, 10, 12. These top numbers are the hours legend.\n"
+    "- The VERTICAL axis is the DAY OF THE MONTH, running TOP to BOTTOM (day 1 at the top, then 2, "
+    "3, ... downward). Each day is one horizontal level, lined up with the habit-grid rows to the "
+    "left.\n"
+    "So for each day (each level going down), the blue point sits at some horizontal position; how "
+    "far RIGHT it is gives that day's sleep hours, read against the top hours scale.\n"
+    "Work day by day from the top: for day N, find the blue dot on that level, see which top hour "
+    "labels it falls between, and read the value; round to the nearest HALF hour (typical values "
+    "are 4-10). If small hour numbers are handwritten next to the blue dots, prefer reading those "
+    "digits directly. Only include a day if a blue point is clearly there; do NOT guess, "
+    "interpolate across gaps, or invent a smooth trend. An omitted day is better than a wrong one "
+    "(it is corrected by hand afterwards).\n"
     'Return ONLY a JSON array of objects [{"day": <1-31 integer>, "hours": <number>}], in '
     "ascending day order, no extra text. Skip days with no clear point."
 )
@@ -173,13 +181,27 @@ _OVERALL_PROMPT = (
 )
 
 
+# Transient statuses worth retrying: rate limits (429) and the 5xx a free tier throws under load.
+# Free providers (esp. Nvidia) return 500 on concurrent hits — the parallel extract triggers exactly
+# that — so 500/502/504 must retry, not just 429/503, or one hiccup fails the whole extraction.
+_RETRY_STATUS = frozenset({429, 500, 502, 503, 504})
+
+
 def _post_chat(base_url: str, api_key: str, payload: dict, timeout: float, retries: int) -> str:
-    """One provider's /chat/completions call → reply text, backing off on transient 429/503."""
+    """One provider's /chat/completions call → reply text, backing off on transient 5xx/429 and
+    read timeouts (a slow free model that eventually answers on a retry)."""
     url = f"{base_url.rstrip('/')}/chat/completions"
     headers = {"Authorization": f"Bearer {api_key}"}
+    resp = None
     for attempt in range(retries + 1):
-        resp = httpx.post(url, json=payload, headers=headers, timeout=timeout)
-        if resp.status_code in (429, 503) and attempt < retries:
+        try:
+            resp = httpx.post(url, json=payload, headers=headers, timeout=timeout)
+        except httpx.TimeoutException:
+            if attempt < retries:
+                time.sleep(3 * (attempt + 1))
+                continue
+            raise
+        if resp.status_code in _RETRY_STATUS and attempt < retries:
             time.sleep(3 * (attempt + 1))
             continue
         break

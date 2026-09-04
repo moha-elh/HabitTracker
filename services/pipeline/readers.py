@@ -4,21 +4,26 @@ Talks to any OpenAI-compatible chat endpoint (Gemini, Groq, OpenRouter, Ollama, 
 so switching free providers is an env change, not a code change (CLAUDE.md §10 swappable
 interface). Defaults target Gemini's OpenAI-compatible endpoint.
 
+Providers form an ordered failover chain built from whichever keys are in .env — Google
+(GEMNINI_KEY) first, then Groq (GROQ_KEY), then Nvidia (NVIDIA_KEY). A call falls through to the
+next provider on any HTTP/network error (overload, quota, outage). See _PROVIDER_SPECS.
+
 Env:
-  LABEL_READER_BASE_URL  (default: Gemini OpenAI-compat endpoint)
-  LABEL_READER_MODEL     (default: gemini-2.0-flash)
-  LABEL_READER_API_KEY   (fallback: GEMNINI_KEY from .env)
-No key → NullLabelReader (blank labels, typed in review). Key never leaves this process except
-to the configured provider.
+  GEMNINI_KEY / GROQ_KEY / NVIDIA_KEY   provider keys; each present one joins the chain in order
+  LABEL_READER_API_KEY (+ _BASE_URL / _MODEL)  override: use a single custom provider instead
+No key → NullLabelReader (blank labels, typed in review). Keys never leave this process except to
+the provider being called.
 """
 
 from __future__ import annotations
 
 import base64
 import json
+import logging
 import os
 import re
 import time
+from dataclasses import dataclass
 
 import cv2
 import httpx
@@ -28,11 +33,38 @@ from pipeline.labels import LabelReader, NullLabelReader
 from pipeline.notes import MomentsReader, NullMomentsReader
 from pipeline.sleep import NullSleepReader, SleepReader
 
+_log = logging.getLogger("hc.readers")
+
 _DEFAULT_BASE = "https://generativelanguage.googleapis.com/v1beta/openai"
 # Lite flash is fast enough on the free tier and reads handwriting well; heavier flash models
 # time out on free quota. Override via LABEL_READER_MODEL.
 _DEFAULT_MODEL = "gemini-flash-lite-latest"
 _MAX_DIM = 1024  # downscale big photos → faster calls, smaller payload
+
+
+@dataclass(frozen=True)
+class ProviderCfg:
+    """One OpenAI-compatible provider: where to call it and which vision/text model to use.
+    vision_model is None for a text-only provider (skipped in the vision failover chain)."""
+    name: str
+    base_url: str
+    api_key: str
+    vision_model: str | None
+    text_model: str
+
+
+# Ordered failover chain (spec: Google first, then Groq, then Nvidia). A provider joins the chain
+# only when its key is in .env; a call falls through to the next provider on any HTTP/network error
+# (overload, quota, outage). base_url + models are each provider's OpenAI-compatible endpoints.
+# Groq exposes no vision model on the free tier (text-only here), so it sits out the vision chain.
+# Nvidia's 11b vision is fast and reliable; the 90b variant times out on big grids.
+_PROVIDER_SPECS: list[tuple[str, str, str, str | None, str]] = [
+    ("google", _DEFAULT_BASE, "GEMNINI_KEY", _DEFAULT_MODEL, _DEFAULT_MODEL),
+    ("groq", "https://api.groq.com/openai/v1", "GROQ_KEY",
+     None, "openai/gpt-oss-120b"),
+    ("nvidia", "https://integrate.api.nvidia.com/v1", "NVIDIA_KEY",
+     "meta/llama-3.2-11b-vision-instruct", "meta/llama-3.3-70b-instruct"),
+]
 
 _LABEL_PROMPT = (
     "This image is a hand-drawn monthly habit tracker. Read ALL the habit row labels "
@@ -83,98 +115,159 @@ _REVIEW_PROMPT = (
     "strongest and weakest weekday.\n"
     "- ### Working vs slipping: the 1-2 strongest habits (by % or streak) and the 1-2 weakest (by "
     "name and %).\n"
-    "- ### Try next month: exactly 3 concrete changes tied to the data: a specific habit to ADD "
-    "that supports a weak area, the keystone habit to protect, and a sleep target from their "
-    "productive days. Name habits and numbers in every tip.\n"
+    "- ### Try next month: exactly 3 concrete changes tied to the data, each as its OWN markdown "
+    "'- ' bullet on its own line (not prose, not a numbered list): a specific habit to ADD that "
+    "supports a weak area, the keystone habit to protect, and a sleep target from their productive "
+    "days. Name habits and numbers in every bullet.\n"
     "No medical claims or diagnoses. Never invent data. Never use an em dash. Under ~300 words.\n\n"
     "MONTH DATA:\n"
 )
 
 
-def _text_call(base_url: str, model: str, api_key: str, prompt: str, timeout: float) -> str:
-    """One OpenAI-compatible text chat call → the reply text. Retries transient 429/503."""
-    payload = {"model": model, "temperature": 0.5, "messages": [{"role": "user", "content": prompt}]}
+_OVERALL_PROMPT = (
+    "You are a sharp data analyst and habit coach reviewing ONE person's ENTIRE history of "
+    "self-tracked months (each month's number-rich summary follows, oldest first, separated by "
+    "'===='). Read ACROSS the months for the long-arc story a single-month review can't see.\n\n"
+    "NON-NEGOTIABLE STYLE RULES (a generic answer is a failed answer):\n"
+    "1. EVERY sentence must cite at least one specific number or name pulled from the data below "
+    "(a percentage, an hour count, a habit name, a month name, a correlation, a streak, a weekday). "
+    "A sentence with no data in it is banned. Delete it.\n"
+    "2. Wrap EVERY such value in **bold** with double asterisks: every %, every hour count, every "
+    "habit name, every month name, every correlation, every streak length, every weekday.\n"
+    "3. Always COMPARE, never just state: 'X in **Mar** vs Y in **Aug**', 'up/down from ** _%** to "
+    "** _%**', 'this habit vs that habit'. A number on its own is weaker than the same number next "
+    "to what it moved from.\n"
+    "4. After each pattern, add WHY it likely happened and what the person should DO about it. "
+    "Analysis, not a readout of the numbers.\n"
+    "5. Actually use every signal the data gives you (per-month completion, per-habit % over time, "
+    "mean sleep per month, sleep-productivity correlation, keystone lift, weekday averages, "
+    "half-splits/momentum). Do not skip a section because it's harder.\n"
+    "6. No generic wellness advice ('drink water', 'stay consistent', 'get enough sleep'). If a "
+    "point isn't backed by a number in the data, cut it. No medical claims. Never invent data. "
+    "Never use an em dash.\n\n"
+    "Here is the DENSITY and TONE required (invented example, do NOT reuse its numbers):\n"
+    "\"Your **Reading** habit is the anchor of every strong month: it hit **91%** in **Feb** and "
+    "**88%** in **Mar**, the two months your overall completion also peaked (**79%** and **74%**), "
+    "while **Nov**, your worst month at **46%**, is also the only one where **Reading** fell to "
+    "**32%**. That is a keystone signal worth protecting first. Sleep tells the same story: your "
+    "sleep-productivity correlation was **+0.61** in the three months you averaged over **7.4h**, "
+    "but collapsed to **-0.05** in **Nov** at **6.2h**, so the fix isn't more habits, it's guarding "
+    "the **7.5h** floor that your best months share.\"\n\n"
+    "Now write the review as GitHub-flavored markdown, using ### for each heading:\n"
+    "- One opener line naming the single biggest multi-month pattern (before the first heading), "
+    "with its numbers bolded.\n"
+    "- ### The trajectory: completion trending up, down, or flat? Quote the per-month completion %s "
+    "in order, name the best and worst month with their %s, and say what the swing means.\n"
+    "- ### What sticks, what slips: name the habits that climbed month over month, the ones that "
+    "decayed or were dropped, and the rock-solid ones, each with their % across months.\n"
+    "- ### Sleep over time: how mean sleep moved month to month and whether the sleep-productivity "
+    "link holds every month or only some. Quote the per-month hours and correlations.\n"
+    "- ### Keystone across months: the habit whose kept months repeatedly coincide with higher "
+    "overall completion. Name it, show the pairing, say to protect it first.\n"
+    "- ### Rhythm across months: recurring strong/weak weekday and whether months tend to fade in "
+    "the second half. Cite the weekday averages and half-splits.\n"
+    "- ### The next month: exactly 3 concrete changes tied to the trends above, each its OWN "
+    "markdown '- ' bullet on its own line, each naming a habit and a target number.\n"
+    "Aim for ~450-550 words. Bold every value. Compare, explain, and coach in every section.\n\n"
+    "ALL MONTHS DATA:\n"
+)
+
+
+def _post_chat(base_url: str, api_key: str, payload: dict, timeout: float, retries: int) -> str:
+    """One provider's /chat/completions call → reply text, backing off on transient 429/503."""
     url = f"{base_url.rstrip('/')}/chat/completions"
     headers = {"Authorization": f"Bearer {api_key}"}
-    for attempt in range(4):
+    for attempt in range(retries + 1):
         resp = httpx.post(url, json=payload, headers=headers, timeout=timeout)
-        if resp.status_code in (429, 503) and attempt < 3:
-            time.sleep(2 * (attempt + 1))
+        if resp.status_code in (429, 503) and attempt < retries:
+            time.sleep(3 * (attempt + 1))
             continue
         break
     resp.raise_for_status()
     return resp.json()["choices"][0]["message"]["content"]
+
+
+def _call_chain(providers: list[ProviderCfg], payload_for, timeout: float) -> str:
+    """Try each provider in order; fall through to the next on any HTTP/network error. Raises the
+    last provider's error if all fail. A provider with a fallback behind it fails FAST (no backoff
+    wait) so a 503 hands off to the next provider immediately; only the last one backs off on
+    transient 429/503 (there's nothing else to try)."""
+    last: Exception | None = None
+    for i, p in enumerate(providers):
+        retries = 5 if i == len(providers) - 1 else 0  # patient only when there's no fallback left
+        try:
+            return _post_chat(p.base_url, p.api_key, payload_for(p), timeout, retries)
+        except (httpx.HTTPStatusError, httpx.RequestError) as e:
+            last = e
+            _log.warning("provider '%s' failed, trying next: %s", p.name, e)
+    raise last if last else RuntimeError("no providers configured")
+
+
+def _text_call(providers: list[ProviderCfg], prompt: str, timeout: float) -> str:
+    """Text chat across the failover chain → reply text."""
+    return _call_chain(
+        providers,
+        lambda p: {"model": p.text_model, "temperature": 0.5, "messages": [{"role": "user", "content": prompt}]},
+        timeout,
+    )
+
+
+def _vision_call(providers: list[ProviderCfg], prompt: str, image_png: bytes, timeout: float, max_dim: int = _MAX_DIM) -> str:
+    """Vision chat across the failover chain → reply text. The image is downscaled once and reused."""
+    vision = [p for p in providers if p.vision_model]  # skip text-only providers (e.g. Groq)
+    b64 = base64.b64encode(_downscale_jpeg(image_png, max_dim)).decode()
+    content = [
+        {"type": "text", "text": prompt},
+        {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}},
+    ]
+    return _call_chain(
+        vision,
+        lambda p: {"model": p.vision_model, "temperature": 0, "messages": [{"role": "user", "content": content}]},
+        timeout,
+    )
 
 
 class OpenAICompatReviewer:
-    def __init__(self, base_url: str, model: str, api_key: str, timeout: float = 60.0):
-        self.base_url, self.model, self.api_key, self.timeout = base_url, model, api_key, timeout
+    def __init__(self, providers: list[ProviderCfg], timeout: float = 60.0):
+        self.providers, self.timeout = providers, timeout
 
     def review(self, summary: str) -> str:
-        return _text_call(self.base_url, self.model, self.api_key, _REVIEW_PROMPT + summary, self.timeout).strip()
+        return _text_call(self.providers, _REVIEW_PROMPT + summary, self.timeout).strip()
+
+    def review_overall(self, summary: str) -> str:
+        """Cross-month review over every month's summary concatenated (spec 011)."""
+        return _text_call(self.providers, _OVERALL_PROMPT + summary, self.timeout).strip()
 
 
 def review_from_env() -> OpenAICompatReviewer | None:
-    """Text reviewer, or None when no API key is configured (the endpoint then 503s with a note)."""
-    key = _key()
-    if not key:
-        return None
-    base = os.getenv("LABEL_READER_BASE_URL", _DEFAULT_BASE)
-    model = os.getenv("REVIEW_MODEL", os.getenv("LABEL_READER_MODEL", _DEFAULT_MODEL))
-    return OpenAICompatReviewer(base, model, key)
-
-
-def _vision_call(base_url: str, model: str, api_key: str, prompt: str, image_png: bytes, timeout: float, max_dim: int = _MAX_DIM) -> str:
-    """One OpenAI-compatible vision chat call → the reply text. Retries transient 429/503."""
-    b64 = base64.b64encode(_downscale_jpeg(image_png, max_dim)).decode()
-    payload = {
-        "model": model,
-        "temperature": 0,
-        "messages": [
-            {
-                "role": "user",
-                "content": [
-                    {"type": "text", "text": prompt},
-                    {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}},
-                ],
-            }
-        ],
-    }
-    url = f"{base_url.rstrip('/')}/chat/completions"
-    headers = {"Authorization": f"Bearer {api_key}"}
-    for attempt in range(4):  # free tiers throttle: back off on 429/503
-        resp = httpx.post(url, json=payload, headers=headers, timeout=timeout)
-        if resp.status_code in (429, 503) and attempt < 3:
-            time.sleep(2 * (attempt + 1))
-            continue
-        break
-    resp.raise_for_status()
-    return resp.json()["choices"][0]["message"]["content"]
+    """Text reviewer over the failover chain, or None when no provider key is configured."""
+    ps = _providers()
+    return OpenAICompatReviewer(ps) if ps else None
 
 
 class OpenAICompatLabelReader:
-    def __init__(self, base_url: str, model: str, api_key: str, timeout: float = 120.0):
-        self.base_url, self.model, self.api_key, self.timeout = base_url, model, api_key, timeout
+    def __init__(self, providers: list[ProviderCfg], timeout: float = 120.0):
+        self.providers, self.timeout = providers, timeout
 
     def read(self, image_png: bytes) -> list[str]:
-        return _parse_labels(_vision_call(self.base_url, self.model, self.api_key, _LABEL_PROMPT, image_png, self.timeout))
+        return _parse_labels(_vision_call(self.providers, _LABEL_PROMPT, image_png, self.timeout))
 
 
 class OpenAICompatMomentsReader:
-    def __init__(self, base_url: str, model: str, api_key: str, timeout: float = 120.0):
-        self.base_url, self.model, self.api_key, self.timeout = base_url, model, api_key, timeout
+    def __init__(self, providers: list[ProviderCfg], timeout: float = 120.0):
+        self.providers, self.timeout = providers, timeout
 
     def read(self, image_png: bytes) -> list[dict]:
-        return _parse_moments(_vision_call(self.base_url, self.model, self.api_key, _MOMENTS_PROMPT, image_png, self.timeout))
+        return _parse_moments(_vision_call(self.providers, _MOMENTS_PROMPT, image_png, self.timeout))
 
 
 class OpenAICompatSleepReader:
-    def __init__(self, base_url: str, model: str, api_key: str, timeout: float = 120.0):
-        self.base_url, self.model, self.api_key, self.timeout = base_url, model, api_key, timeout
+    def __init__(self, providers: list[ProviderCfg], timeout: float = 120.0):
+        self.providers, self.timeout = providers, timeout
 
     def read(self, image_png: bytes) -> list[dict]:
         # Bigger than labels/moments: the sleep line is fine detail that 1024px blurs into mush.
-        return _parse_sleep(_vision_call(self.base_url, self.model, self.api_key, _SLEEP_PROMPT, image_png, self.timeout, max_dim=1600))
+        return _parse_sleep(_vision_call(self.providers, _SLEEP_PROMPT, image_png, self.timeout, max_dim=1600))
 
 
 def _downscale_jpeg(raw: bytes, max_dim: int = _MAX_DIM) -> bytes:
@@ -254,33 +347,32 @@ def _parse_sleep(text: str) -> list[dict]:
     return out
 
 
-def _key() -> str | None:
-    key = os.getenv("LABEL_READER_API_KEY") or os.getenv("GEMNINI_KEY")
-    return key.strip() if key and key.strip() else None
+def _providers() -> list[ProviderCfg]:
+    """The ordered failover chain from env keys (Google → Groq → Nvidia), only the ones with a key.
+    An explicit LABEL_READER_API_KEY still wins as a single custom provider (back-compat)."""
+    override = os.getenv("LABEL_READER_API_KEY")
+    if override and override.strip():
+        base = os.getenv("LABEL_READER_BASE_URL", _DEFAULT_BASE)
+        model = os.getenv("LABEL_READER_MODEL", _DEFAULT_MODEL)
+        return [ProviderCfg("custom", base, override.strip(), model, model)]
+    out: list[ProviderCfg] = []
+    for name, base, env, vmodel, tmodel in _PROVIDER_SPECS:
+        k = os.getenv(env)
+        if k and k.strip():
+            out.append(ProviderCfg(name, base, k.strip(), vmodel, tmodel))
+    return out
 
 
 def from_env() -> LabelReader:
-    key = _key()
-    if not key:
-        return NullLabelReader()
-    base = os.getenv("LABEL_READER_BASE_URL", _DEFAULT_BASE)
-    model = os.getenv("LABEL_READER_MODEL", _DEFAULT_MODEL)
-    return OpenAICompatLabelReader(base, model, key)
+    ps = _providers()
+    return OpenAICompatLabelReader(ps) if ps else NullLabelReader()
 
 
 def moments_from_env() -> MomentsReader:
-    key = _key()
-    if not key:
-        return NullMomentsReader()
-    base = os.getenv("LABEL_READER_BASE_URL", _DEFAULT_BASE)
-    model = os.getenv("MOMENTS_READER_MODEL", os.getenv("LABEL_READER_MODEL", _DEFAULT_MODEL))
-    return OpenAICompatMomentsReader(base, model, key)
+    ps = _providers()
+    return OpenAICompatMomentsReader(ps) if ps else NullMomentsReader()
 
 
 def sleep_from_env() -> SleepReader:
-    key = _key()
-    if not key:
-        return NullSleepReader()
-    base = os.getenv("LABEL_READER_BASE_URL", _DEFAULT_BASE)
-    model = os.getenv("SLEEP_READER_MODEL", os.getenv("LABEL_READER_MODEL", _DEFAULT_MODEL))
-    return OpenAICompatSleepReader(base, model, key)
+    ps = _providers()
+    return OpenAICompatSleepReader(ps) if ps else NullSleepReader()

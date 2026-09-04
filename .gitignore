@@ -7,6 +7,11 @@ dist-ssr/
 # Rust / Tauri
 target/
 apps/desktop/src-tauri/gen/
+apps/desktop/src-tauri/binaries/
+
+# PyInstaller build artifacts (frozen sidecar)
+services/pipeline/build/
+services/pipeline/*.spec
 
 # Python / uv
 .venv/

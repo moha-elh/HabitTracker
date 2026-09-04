@@ -75,7 +75,16 @@ ALTER TABLE months ADD COLUMN confetti INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE months ADD COLUMN ai_review TEXT;
 """
 
-MIGRATIONS: list[str] = [_SCHEMA_V1, _SCHEMA_V2, _SCHEMA_V3]
+# Migration 4: a tiny key/value scratch table for app-wide cached derivations that aren't tied to
+# one month (spec 011). Currently holds the cross-month "full review" keyed by a months signature.
+_SCHEMA_V4 = """
+CREATE TABLE app_kv (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
+"""
+
+MIGRATIONS: list[str] = [_SCHEMA_V1, _SCHEMA_V2, _SCHEMA_V3, _SCHEMA_V4]
 
 
 @dataclass
@@ -212,6 +221,14 @@ def load_month(conn: sqlite3.Connection, year: int, month: int) -> dict | None:
     }
 
 
+def delete_month(conn: sqlite3.Connection, year: int, month: int) -> bool:
+    """Delete a committed month and all its rows (entries/metrics/moments cascade via FK). Habits
+    are shared across months and are left untouched. Returns True if a month was removed (spec 013)."""
+    with conn:
+        cur = conn.execute("DELETE FROM months WHERE year = ? AND month = ?", (year, month))
+    return cur.rowcount > 0
+
+
 def get_confetti(conn: sqlite3.Connection, year: int, month: int) -> int | None:
     """The stored confetti click count, or None if the month isn't committed (spec 013)."""
     row = conn.execute("SELECT confetti FROM months WHERE year = ? AND month = ?", (year, month)).fetchone()
@@ -236,6 +253,21 @@ def set_review(conn: sqlite3.Connection, year: int, month: int, text: str) -> No
     """Cache the LLM review markdown for a month (spec 013)."""
     with conn:
         conn.execute("UPDATE months SET ai_review = ? WHERE year = ? AND month = ?", (text, year, month))
+
+
+def get_kv(conn: sqlite3.Connection, key: str) -> str | None:
+    """App-wide cached value for a key, or None if never set (spec 011)."""
+    row = conn.execute("SELECT value FROM app_kv WHERE key = ?", (key,)).fetchone()
+    return None if row is None else row["value"]
+
+
+def set_kv(conn: sqlite3.Connection, key: str, value: str) -> None:
+    """Upsert an app-wide cached value (spec 011)."""
+    with conn:
+        conn.execute(
+            "INSERT INTO app_kv(key, value) VALUES(?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            (key, value),
+        )
 
 
 def load_month_images(conn: sqlite3.Connection, year: int, month: int) -> dict | None:

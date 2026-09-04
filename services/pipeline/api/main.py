@@ -9,11 +9,14 @@ from __future__ import annotations
 import argparse
 import base64
 import calendar
+import json
 import logging
 import os
 from calendar import monthrange
 from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor
 
+import httpx
 import uvicorn
 from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile
@@ -28,7 +31,9 @@ from pipeline.notes import MomentsReader
 from pipeline.sleep import SleepReader
 from readers import from_env, moments_from_env, review_from_env, sleep_from_env
 
-load_dotenv()  # makes GEMNINI_KEY / LABEL_READER_* available to the reader
+# Load provider keys. HC_ENV_FILE points at a specific .env in the packaged app (the Rust host sets
+# it to the per-user app-data .env); unset in dev → python-dotenv searches up from the CWD as before.
+load_dotenv(os.getenv("HC_ENV_FILE"))
 
 DEFAULT_PORT = 8756
 DB_PATH = os.environ.get("HC_DB_PATH", "habit.db")
@@ -46,15 +51,24 @@ app.add_middleware(
 )
 
 # --- injectable composition (overridden in tests: stub reader + in-memory DB) ---
-_conn = None
+_migrated = False
 
 
 def get_conn():
-    global _conn
-    if _conn is None:
-        _conn = store.connect(DB_PATH)
-        store.migrate(_conn)
-    return _conn
+    # One connection per request. A single shared sqlite3 connection is NOT safe under the
+    # concurrent requests the Trends page fires (Promise.all over every month) — interleaved
+    # cursor state on the shared conn spuriously returns no rows → bogus "month not committed"
+    # 404s. Per-request connections are cheap for a local single-user app and sqlite's own
+    # file locking handles the rest. Migrate once (idempotent; guarded by user_version).
+    global _migrated
+    conn = store.connect(DB_PATH)
+    if not _migrated:
+        store.migrate(conn)
+        _migrated = True
+    try:
+        yield conn
+    finally:
+        conn.close()
 
 
 def get_reader() -> LabelReader:
@@ -170,6 +184,55 @@ def _month_summary(data: dict) -> str:
     return "\n".join(lines)
 
 
+def _months_signature(months: list[dict]) -> str:
+    """Stable signature of the committed months (year, month, entry count). Changes when a month is
+    added, deleted, or re-imported with a different marked-cell count — which is exactly when the
+    cross-month review must be regenerated (spec 011)."""
+    return json.dumps(sorted([m["year"], m["month"], m["entries"]] for m in months))
+
+
+def _overall_summary(conn, months: list[dict]) -> str:
+    """Concatenate every committed month's number-rich summary, oldest first, for the cross-month
+    reviewer. Reuses the same per-month summary the single-month review is built from."""
+    parts = []
+    for m in sorted(months, key=lambda x: (x["year"], x["month"])):
+        data = store.load_month(conn, m["year"], m["month"])
+        if data:
+            parts.append(_month_summary(data))
+    return "\n\n====\n\n".join(parts)
+
+
+@app.get("/review/overall")
+def overall_review_route(refresh: bool = False, only_cached: bool = False, conn=Depends(get_conn), reviewer=Depends(get_reviewer)) -> dict:
+    """LLM review across ALL committed months (spec 011). Cached in the DB and regenerated only when
+    the set of committed months changes (add / delete / re-import), or on ``refresh=true``. 404 if no
+    months are committed, 503 if no API key and nothing cached yet. ``only_cached=true`` never calls
+    the AI: it returns an existing cached review (flagged stale if the months changed) or 404 — used
+    on page load so the review is generated only when the user clicks Generate."""
+    months = store.list_months(conn)
+    if not months:
+        raise HTTPException(status_code=404, detail="no committed months yet")
+    sig = _months_signature(months)
+    cached = store.get_kv(conn, "overall_review")
+    obj = json.loads(cached) if cached else None
+    if not refresh and obj and obj.get("sig") == sig:
+        return {"review": obj["review"], "cached": True, "months": len(months), "stale": False}
+    if only_cached:  # page-load probe: show existing cache if any, but never generate
+        if obj:
+            return {"review": obj["review"], "cached": True, "months": len(months), "stale": obj.get("sig") != sig}
+        raise HTTPException(status_code=404, detail="no cached review yet")
+    if reviewer is None:
+        if obj:  # no key now, but a review exists — serve it, flagged stale if months changed
+            return {"review": obj["review"], "cached": True, "months": len(months), "stale": obj.get("sig") != sig}
+        raise HTTPException(status_code=503, detail="No AI key configured. Add GEMNINI_KEY to .env to enable the full review.")
+    try:
+        review = reviewer.review_overall(_overall_summary(conn, months))
+    except Exception as e:  # LLM/network failure
+        raise HTTPException(status_code=502, detail=f"review failed: {e}")
+    store.set_kv(conn, "overall_review", json.dumps({"sig": sig, "review": review}))
+    return {"review": review, "cached": False, "months": len(months), "stale": False}
+
+
 @app.get("/health")
 def health() -> dict[str, str]:
     """Liveness probe. The frontend renders ``status`` verbatim (spec 001)."""
@@ -213,18 +276,29 @@ def extract_route(
     cols = days or monthrange(year, month)[1]
     last = monthrange(year, month)[1]
     image_bytes = image.file.read()
-    try:
-        result = extract(
-            image_bytes,
-            GridConfig(year=year, month=month, days=cols, flip_habits=flip_habits),
-            reader,
-        )
-    except GridNotFound as e:
-        raise HTTPException(status_code=422, detail=str(e))
+    moments_bytes = moments_image.file.read() if moments_image else None
+    # The three reads are independent network calls, so fan them out: grid+labels, moments, and
+    # sleep run at once and the request waits on the slowest, not the sum. _read_page never raises;
+    # only the grid extract can, so its future is what we translate to an HTTP status below.
+    with ThreadPoolExecutor(max_workers=3) as pool:
+        fut_grid = pool.submit(extract, image_bytes, GridConfig(year=year, month=month, days=cols, flip_habits=flip_habits), reader)
+        fut_moments = pool.submit(_read_page, moments_reader, moments_bytes, last)
+        fut_sleep = pool.submit(_read_page, sleep_reader, image_bytes, last)  # sleep chart is in the grid image
+        try:
+            result = fut_grid.result()
+        except GridNotFound as e:
+            raise HTTPException(status_code=422, detail=str(e))
+        except httpx.HTTPStatusError as e:  # provider (Gemini) overloaded/erroring — surface it cleanly
+            code = e.response.status_code
+            if code in (429, 503):
+                raise HTTPException(status_code=503, detail="The AI vision service is temporarily overloaded. Wait a moment and try extracting again.")
+            raise HTTPException(status_code=502, detail=f"AI vision service error ({code}). Try again in a moment.")
+        except httpx.RequestError:
+            raise HTTPException(status_code=503, detail="Could not reach the AI vision service. Check your connection and try again.")
+        moments, moments_status = fut_moments.result()
+        sleep, sleep_status = fut_sleep.result()
 
     ex = result.extraction
-    moments, moments_status = _read_page(moments_reader, moments_image.file.read() if moments_image else None, last)
-    sleep, sleep_status = _read_page(sleep_reader, image_bytes, last)  # sleep chart is in the grid image
     update: dict = {}
     if moments:
         update["moments"] = [{"day": m["day"], "text": m["text"]} for m in moments]
@@ -256,6 +330,14 @@ def month_route(year: int, month: int, conn=Depends(get_conn)) -> dict:
     if data is None:
         raise HTTPException(status_code=404, detail="month not committed")
     return data
+
+
+@app.delete("/months/{year}/{month}")
+def delete_month_route(year: int, month: int, conn=Depends(get_conn)) -> dict:
+    """Delete a committed month and its rows (spec 013). 404 if it isn't committed."""
+    if not store.delete_month(conn, year, month):
+        raise HTTPException(status_code=404, detail="month not committed")
+    return {"deleted": True}
 
 
 @app.get("/months/{year}/{month}/images")

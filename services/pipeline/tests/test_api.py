@@ -123,6 +123,21 @@ def test_load_uncommitted_month_is_404(client):
     assert client.get("/months/2099/1").status_code == 404
 
 
+def test_delete_month_removes_it_and_keeps_habits(client):
+    client.post("/commit", json=_commit(cells=[{"day": 1, "habit": "Read", "status": "done"}]))
+    assert client.get("/months/2026/8").status_code == 200
+    r = client.delete("/months/2026/8")
+    assert r.status_code == 200 and r.json() == {"deleted": True}
+    assert client.get("/months/2026/8").status_code == 404  # gone
+    assert client.get("/months").json() == []  # not listed
+    # the shared habit row is untouched, so re-committing the month works
+    assert client.post("/commit", json=_commit()).status_code == 200
+
+
+def test_delete_uncommitted_month_is_404(client):
+    assert client.delete("/months/2099/1").status_code == 404
+
+
 class _StubReviewer:
     """Echoes the summary back so the test asserts the summary reached the reviewer."""
 
@@ -161,6 +176,10 @@ class _CountingReviewer:
         self.calls += 1
         return f"opener {self.calls}"
 
+    def review_overall(self, summary: str) -> str:
+        self.calls += 1
+        return f"overall {self.calls}"
+
 
 def test_review_is_cached_and_only_regenerated_on_refresh(client):
     rev = _CountingReviewer()
@@ -180,6 +199,94 @@ def test_cached_review_served_even_without_key(client):
     app.dependency_overrides[get_reviewer] = lambda: None  # key later removed
     r = client.get("/months/2026/8/review")
     assert r.status_code == 200 and r.json()["cached"] is True
+
+
+def test_overall_review_caches_until_months_change(client):
+    rev = _CountingReviewer()
+    app.dependency_overrides[get_reviewer] = lambda: rev
+    assert client.get("/review/overall").status_code == 404  # nothing committed yet
+
+    client.post("/commit", json=_commit(year=2026, month=8))
+    r = client.get("/review/overall").json()
+    assert r == {"review": "overall 1", "cached": False, "months": 1, "stale": False}
+    assert client.get("/review/overall").json()["cached"] is True  # served from cache
+    assert rev.calls == 1
+
+    # Adding a month changes the signature → a new call.
+    client.post("/commit", json=_commit(year=2026, month=9))
+    r2 = client.get("/review/overall").json()
+    assert r2 == {"review": "overall 2", "cached": False, "months": 2, "stale": False}
+    assert rev.calls == 2
+    assert client.get("/review/overall").json()["cached"] is True  # cached again for the new set
+
+
+def test_overall_review_only_cached_never_generates(client):
+    rev = _CountingReviewer()
+    app.dependency_overrides[get_reviewer] = lambda: rev
+    client.post("/commit", json=_commit(year=2026, month=8))
+    # Page-load probe with nothing cached: 404, and NO AI call.
+    assert client.get("/review/overall?only_cached=true").status_code == 404
+    assert rev.calls == 0
+    # After a real generate, the probe serves the cache without generating again.
+    assert client.get("/review/overall").json()["cached"] is False
+    assert client.get("/review/overall?only_cached=true").json() == {"review": "overall 1", "cached": True, "months": 1, "stale": False}
+    assert rev.calls == 1
+    # Months change → probe still won't generate; serves the old one flagged stale.
+    client.post("/commit", json=_commit(year=2026, month=9))
+    r = client.get("/review/overall?only_cached=true").json()
+    assert r["stale"] is True and r["cached"] is True and rev.calls == 1
+
+
+def test_overall_review_regenerates_when_a_month_is_re_imported(client):
+    rev = _CountingReviewer()
+    app.dependency_overrides[get_reviewer] = lambda: rev
+    client.post("/commit", json=_commit(cells=[{"day": 1, "habit": "Read", "status": "done"}]))
+    client.get("/review/overall")  # cache with 1 entry
+    # Re-import the same month with an extra marked cell → entry count changes → regenerate.
+    client.post("/commit", json=_commit(cells=[
+        {"day": 1, "habit": "Read", "status": "done"},
+        {"day": 2, "habit": "Read", "status": "missed"},
+    ]))
+    assert client.get("/review/overall").json()["cached"] is False
+    assert rev.calls == 2
+
+
+def test_overall_review_served_stale_without_key(client):
+    rev = _CountingReviewer()
+    app.dependency_overrides[get_reviewer] = lambda: rev
+    client.post("/commit", json=_commit(year=2026, month=8))
+    client.get("/review/overall")  # generate + cache
+    client.post("/commit", json=_commit(year=2026, month=9))  # months changed
+    app.dependency_overrides[get_reviewer] = lambda: None  # key removed before regenerating
+    r = client.get("/review/overall").json()
+    assert r["review"] == "overall 1" and r["cached"] is True and r["stale"] is True
+
+
+def test_concurrent_month_loads_never_404(tmp_path, monkeypatch):
+    """Trends fires GET /months/{y}/{m} for every month at once (Promise.all). With a single
+    shared sqlite connection that raced and returned spurious 'month not committed' 404s. Use the
+    REAL get_conn (per-request connection) over a temp-file DB and hammer it concurrently."""
+    import concurrent.futures as cf
+
+    import api.main as main
+
+    db = tmp_path / "concurrency.db"
+    monkeypatch.setattr(main, "DB_PATH", str(db))
+    monkeypatch.setattr(main, "_migrated", False)
+    main.app.dependency_overrides.pop(get_conn, None)  # exercise the real per-request conn
+    main.app.dependency_overrides[get_reader] = lambda: StubLabelReader([f"H{i}" for i in range(ROWS)])
+    main.app.dependency_overrides[get_moments_reader] = lambda: NullMomentsReader()
+    main.app.dependency_overrides[get_sleep_reader] = lambda: NullSleepReader()
+    try:
+        c = TestClient(main.app)
+        months = list(range(1, 11))
+        for m in months:
+            c.post("/commit", json=_commit(month=m, cells=[{"day": 1, "habit": "Read", "status": "done"}]))
+        with cf.ThreadPoolExecutor(max_workers=10) as ex:
+            codes = list(ex.map(lambda m: c.get(f"/months/2026/{m}").status_code, months * 5))
+        assert set(codes) == {200}, f"got non-200s: {sorted(set(codes))}"
+    finally:
+        main.app.dependency_overrides.clear()
 
 
 def test_confetti_roundtrip_and_persists(client):

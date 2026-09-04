@@ -1,10 +1,11 @@
 // View — the dashboard: month selector + the MonthPanel (stat cards, heatmap, totals/sleep
 // chart, selected-day rail). All numbers come from model/analytics; this file only renders.
 import { useEffect, useMemo, useRef, useState } from "react";
-import { fetchMonth, fetchMonthImages, fetchMonthReview, fetchMonths, saveConfetti } from "../model/api";
+import { deleteMonth, fetchMonth, fetchMonthImages, fetchMonthReview, fetchMonths, saveConfetti } from "../model/api";
 import type { MonthData, MonthItem } from "../model/types";
 import { buildMatrix, monthStats, type MonthStats } from "../model/analytics";
 import { CARD, LABEL, METRIC, MON3, MONTHS, PANEL, WD, btnStyle, inputStyle, secondaryBtn } from "./theme";
+import { renderReview } from "./Markdown";
 
 const msg = (e: unknown) => String(e instanceof Error ? e.message : e);
 
@@ -14,6 +15,9 @@ export function DashboardView() {
   const [data, setData] = useState<MonthData | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [showImages, setShowImages] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [deleteErr, setDeleteErr] = useState<string | null>(null);
 
   useEffect(() => {
     (async () => {
@@ -34,6 +38,22 @@ export function DashboardView() {
     })();
   }, [sel]);
 
+  async function handleDelete() {
+    if (!sel) return;
+    setDeleting(true);
+    setDeleteErr(null);
+    try {
+      await deleteMonth(sel.year, sel.month);
+      const list = await fetchMonths();
+      setMonths(list);
+      setSel(list.length ? { year: list[0].year, month: list[0].month } : null);
+      setConfirmDelete(false);
+    } catch (e) {
+      // keep the dashboard; surface the failure in the dialog (e.g. an old sidecar with no DELETE route)
+      setDeleteErr(msg(e));
+    } finally { setDeleting(false); }
+  }
+
   if (err) return <p style={{ color: "var(--hc-flag-text)" }}>{err}</p>;
   if (months && months.length === 0) return <p style={{ color: "var(--hc-text-muted)" }}>No months yet. Import one from the Import tab.</p>;
   if (!months || !sel) return <p style={{ color: "var(--hc-text-muted)" }}>loading…</p>;
@@ -46,23 +66,73 @@ export function DashboardView() {
       <div style={{ textAlign: "center" }}>
         <div style={{ fontSize: 11, letterSpacing: ".14em", textTransform: "uppercase", color: "var(--hc-text-label)", fontWeight: 700, marginBottom: 6 }}>Habit Chronicle</div>
         <div style={{ display: "flex", justifyContent: "center", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
-          <select style={{ ...inputStyle, fontSize: 20, fontWeight: 700, borderRadius: 10, padding: "8px 16px", cursor: "pointer", textAlign: "center", textAlignLast: "center", fontFamily: "var(--hc-font-display)" }}
-            value={`${sel.year}-${sel.month}`}
-            onChange={(e) => { const [y, m] = e.target.value.split("-").map(Number); setSel({ year: y, month: m }); }}>
-            {months.map((m) => (
-              <option key={`${m.year}-${m.month}`} value={`${m.year}-${m.month}`}>{MONTHS[m.month - 1]} {m.year}</option>
-            ))}
-          </select>
-          <button style={{ ...secondaryBtn, padding: "8px 14px", fontSize: 12.5 }} onClick={() => setShowImages(true)}>View source images</button>
+          <MonthSelect months={months} sel={sel} onSelect={(year, month) => setSel({ year, month })} />
+          <button style={{ ...secondaryBtn, fontSize: 20, fontWeight: 700, fontFamily: "var(--hc-font-display)", borderRadius: 10, padding: "8px 16px" }} onClick={() => setShowImages(true)}>View source images</button>
         </div>
         <div style={{ fontSize: 13, color: "var(--hc-text-muted)", marginTop: 8 }}>
           {imported ? `Imported ${imported.getDate()} ${MON3[imported.getMonth()]} ${imported.getFullYear()} · ` : ""}
           {data ? `${data.habits.length} habits · ${data.days} days` : "loading…"}
         </div>
+        <div style={{ marginTop: 6 }}>
+          <button onClick={() => { setDeleteErr(null); setConfirmDelete(true); }}
+            style={{ background: "none", border: "none", color: "var(--hc-text-faint)", fontSize: 12, cursor: "pointer", textDecoration: "underline", fontFamily: "var(--hc-font-body)" }}>
+            Delete this month
+          </button>
+        </div>
       </div>
 
       {data ? <MonthPanel key={`${data.year}-${data.month}`} data={data} /> : <p style={{ color: "var(--hc-text-muted)" }}>loading…</p>}
       {showImages && <ImagesModal year={sel.year} month={sel.month} onClose={() => setShowImages(false)} />}
+      {confirmDelete && (
+        <div onClick={() => !deleting && setConfirmDelete(false)} style={{ position: "fixed", inset: 0, background: "rgba(20,16,12,0.6)", zIndex: 80, display: "flex", alignItems: "center", justifyContent: "center", padding: 24 }}>
+          <div onClick={(e) => e.stopPropagation()} style={{ background: "var(--hc-surface)", border: "1px solid var(--hc-border)", borderRadius: 16, padding: "26px 28px", maxWidth: 420, textAlign: "center", boxShadow: "0 20px 50px rgba(0,0,0,0.3)" }}>
+            <div style={{ fontFamily: "var(--hc-font-display)", fontSize: 26 }}>Delete {MONTHS[sel.month - 1]} {sel.year}?</div>
+            <div style={{ fontSize: 13.5, color: "var(--hc-text-muted)", lineHeight: 1.5, margin: "10px 0 20px" }}>This permanently removes its grid, sleep hours, and memorable moments. This cannot be undone.</div>
+            {deleteErr && <div style={{ fontSize: 12.5, color: "var(--hc-flag-text)", background: "var(--hc-flag-bg)", border: "1px solid var(--hc-flag-border)", borderRadius: 8, padding: "8px 12px", marginBottom: 16, lineHeight: 1.45 }}>Couldn't delete: {deleteErr}. If this says "Method Not Allowed", restart the app so the sidecar reloads.</div>}
+            <div style={{ display: "flex", gap: 10, justifyContent: "center" }}>
+              <button disabled={deleting} onClick={handleDelete} style={{ ...btnStyle, background: "var(--hc-missed-text)", opacity: deleting ? 0.6 : 1 }}>{deleting ? "Deleting…" : "Delete month"}</button>
+              <button disabled={deleting} onClick={() => setConfirmDelete(false)} style={secondaryBtn}>Cancel</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** Custom month picker (native <select> can't center its option list or place its caret with room
+ * in the webview). Button shows the current month; a popover lists the months, centered. */
+function MonthSelect({ months, sel, onSelect }: { months: MonthItem[]; sel: { year: number; month: number }; onSelect: (year: number, month: number) => void }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const onDoc = (e: MouseEvent) => { if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false); };
+    document.addEventListener("mousedown", onDoc);
+    return () => document.removeEventListener("mousedown", onDoc);
+  }, [open]);
+
+  return (
+    <div ref={ref} style={{ position: "relative" }}>
+      <button onClick={() => setOpen((o) => !o)}
+        style={{ ...inputStyle, position: "relative", fontSize: 20, fontWeight: 700, fontFamily: "var(--hc-font-display)", borderRadius: 10, padding: "8px 30px", cursor: "pointer", textAlign: "center" }}>
+        {MONTHS[sel.month - 1]} {sel.year}
+        <span style={{ position: "absolute", right: 11, top: "50%", transform: "translateY(-50%)", fontSize: 12, color: "var(--hc-text-muted)", pointerEvents: "none" }}>▾</span>
+      </button>
+      {open && (
+        <div style={{ position: "absolute", top: "calc(100% + 6px)", left: 0, right: 0, background: "var(--hc-surface)", border: "1px solid var(--hc-border)", borderRadius: 10, boxShadow: "0 12px 30px rgba(0,0,0,0.15)", zIndex: 30, padding: 4 }}>
+          {months.map((m) => {
+            const active = m.year === sel.year && m.month === sel.month;
+            return (
+              <button key={`${m.year}-${m.month}`} onClick={() => { onSelect(m.year, m.month); setOpen(false); }}
+                style={{ display: "block", width: "100%", textAlign: "center", fontFamily: "var(--hc-font-display)", fontSize: 18, padding: "8px 10px", borderRadius: 8, border: "none", cursor: "pointer",
+                  background: active ? "var(--hc-surface-ink)" : "transparent", color: active ? "#fff" : "var(--hc-text)" }}>
+                {MONTHS[m.month - 1]} {m.year}
+              </button>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }
@@ -320,7 +390,11 @@ function MonthPanel({ data }: { data: MonthData }) {
             </div>
             <div style={{ flex: 1, background: "var(--hc-surface-sunk)", borderRadius: 12, padding: "12px 14px" }}>
               <div style={{ fontSize: 10.5, letterSpacing: ".08em", textTransform: "uppercase", color: "var(--hc-text-faint)", fontWeight: 700 }}>Sleep</div>
-              <div style={{ fontSize: 22, fontWeight: 900, marginTop: 4 }}>{s.sleepByDay.has(selDay) ? s.sleepByDay.get(selDay) : "·"}<span style={{ fontSize: 12, color: "var(--hc-text-faint)", fontWeight: 600 }}>h</span></div>
+              <div style={{ fontSize: 22, fontWeight: 900, marginTop: 4 }}>
+                {s.sleepByDay.has(selDay)
+                  ? <>{s.sleepByDay.get(selDay)}<span style={{ fontSize: 12, color: "var(--hc-text-faint)", fontWeight: 600, marginLeft: 3 }}>h</span></>
+                  : <span style={{ fontSize: 14, color: "var(--hc-text-faint)", fontWeight: 600 }}>not logged</span>}
+              </div>
             </div>
           </div>
           <div style={{ marginTop: 16 }}>
@@ -459,7 +533,9 @@ function InsightsPage({ data, s, review, onReviewed, onClose }: { data: MonthDat
                   <div style={{ width: `${h.pct ?? 0}%`, height: "100%", background: "var(--hc-done)", borderRadius: 5 }} />
                 </div>
                 <span style={{ width: 40, flex: "none", textAlign: "right", fontSize: 12, color: "var(--hc-text-muted)", fontVariantNumeric: "tabular-nums" }}>{h.pct === null ? "·" : `${h.pct}%`}</span>
-                <span style={{ width: 92, flex: "none", textAlign: "right", fontSize: 11, color: "var(--hc-text-faint)" }}>{h.run.len ? `${h.run.len}-day streak` : "no streak"}</span>
+                <span style={{ width: 100, flex: "none", textAlign: "right", fontSize: 12, fontWeight: 700, whiteSpace: "nowrap", color: h.run.len ? "var(--hc-text-body)" : "var(--hc-text-faint)" }}>
+                  {h.run.len ? `${h.run.len}-day streak` : "no streak"}
+                </span>
               </div>
             ))}
           </div>
@@ -469,29 +545,51 @@ function InsightsPage({ data, s, review, onReviewed, onClose }: { data: MonthDat
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, marginTop: 16 }}>
           <div style={{ ...PANEL, padding: "20px 22px" }}>
             <div style={{ fontSize: 16, fontWeight: 700, marginBottom: 14 }}>Your rhythm</div>
-            <Line label="Strongest day" value={s.hasTracked ? `${dateShort(s.bestDay)} · ${s.dayTotals[s.bestDay - 1]} habits` : "·"} />
-            <Line label="Quietest day" value={s.hasTracked ? `${dateShort(s.worstDay)} · ${s.dayTotals[s.worstDay - 1]} habits` : "·"} />
-            <Line label="Best streak" value={s.best.run.len ? `${s.best.name}, ${s.best.run.len} days (${s.best.run.start}→${s.best.run.end} ${MON3[month - 1]})` : "no streak yet"} />
-            <Line label="Habits tracked" value={`${habits.length}`} last />
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+              <Tile label="Strongest day" accent="good"
+                value={s.hasTracked ? <>{dateShort(s.bestDay)} <span style={{ fontSize: 12, fontWeight: 600, color: "var(--hc-text-muted)" }}>· {s.dayTotals[s.bestDay - 1]}</span></> : "·"} />
+              <Tile label="Quietest day" accent="bad"
+                value={s.hasTracked ? <>{dateShort(s.worstDay)} <span style={{ fontSize: 12, fontWeight: 600, color: "var(--hc-text-muted)" }}>· {s.dayTotals[s.worstDay - 1]}</span></> : "·"} />
+              <Tile label="Best streak"
+                value={s.best.run.len ? <>{s.best.run.len}d <span style={{ fontSize: 11.5, fontWeight: 600, color: "var(--hc-text-muted)" }}>{s.best.name}</span></> : "no streak"} />
+              <Tile label="Habits tracked" value={`${habits.length}`} />
+            </div>
           </div>
           <div style={{ ...PANEL, padding: "20px 22px" }}>
             <div style={{ fontSize: 16, fontWeight: 700, marginBottom: 14 }}>Sleep</div>
             {s.hasSleep ? (
               <>
-                <Line label="Mean" value={`${s.meanSleep.toFixed(1)}h / night`} />
-                <Line label="Shortest" value={s.minSleep ? `${s.minSleep.hours}h on ${dateShort(s.minSleep.day)}` : "·"} />
-                <Line label="Longest" value={`${maxSleep}h`} />
-                <Line label="Nights logged" value={`${sleepSeries.length} of ${days}`} />
-                <Line label="Sleep vs habits" value={sleepCorr === null ? "not enough data" : `r = ${sleepCorr.toFixed(2)}`} last />
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10 }}>
+                  <Tile label="Mean" value={`${s.meanSleep.toFixed(1)}h`} />
+                  <Tile label="Shortest" value={s.minSleep ? `${s.minSleep.hours}h` : "·"} />
+                  <Tile label="Longest" value={`${maxSleep}h`} />
+                </div>
                 {sleepSeries.length > 1 && <div style={{ marginTop: 14 }}><Sparkline values={sleepSeries} stroke="var(--hc-sleep)" /></div>}
-                {sleepCorr !== null && (
-                  <div style={{ fontSize: 12, color: "var(--hc-text-muted)", lineHeight: 1.5, marginTop: 12 }}>{corrRead(sleepCorr)}</div>
+                {sleepCorr !== null ? (
+                  <div style={{ display: "flex", gap: 12, alignItems: "center", background: "var(--hc-surface-sunk)", borderRadius: 12, padding: "12px 14px", marginTop: 14 }}>
+                    <div style={{ flex: "none", fontSize: 19, fontWeight: 900, fontVariantNumeric: "tabular-nums", color: "var(--hc-sleep)" }}>r&nbsp;{sleepCorr.toFixed(2)}</div>
+                    <div style={{ fontSize: 12, color: "var(--hc-text-muted)", lineHeight: 1.45 }}>{corrRead(sleepCorr)}</div>
+                  </div>
+                ) : (
+                  <div style={{ fontSize: 12, color: "var(--hc-text-faint)", marginTop: 14 }}>Not enough paired nights to compare sleep with what you got done.</div>
                 )}
+                <div style={{ fontSize: 11.5, color: "var(--hc-text-faint)", marginTop: 12 }}>{sleepSeries.length} of {days} nights logged</div>
               </>
             ) : <div style={{ fontSize: 13, color: "var(--hc-text-muted)" }}>No sleep hours logged this month.</div>}
           </div>
         </div>
       </div>
+    </div>
+  );
+}
+
+/** A small labelled stat tile for the insights panels. `accent` tints the value. */
+function Tile({ label, value, accent }: { label: string; value: React.ReactNode; accent?: "good" | "bad" }) {
+  const color = accent === "good" ? "var(--hc-done-text)" : accent === "bad" ? "var(--hc-missed-text)" : "var(--hc-text)";
+  return (
+    <div style={{ background: "var(--hc-surface-sunk)", borderRadius: 12, padding: "11px 13px", minWidth: 0 }}>
+      <div style={{ fontSize: 10, letterSpacing: ".07em", textTransform: "uppercase", color: "var(--hc-text-faint)", fontWeight: 700 }}>{label}</div>
+      <div style={{ fontSize: 16, fontWeight: 800, marginTop: 4, color, lineHeight: 1.2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{value}</div>
     </div>
   );
 }
@@ -515,16 +613,6 @@ function corrRead(r: number): string {
   return r > 0
     ? `${strength} link: nights with more sleep tend to be days you get more done.`
     : `${strength} link: more sleep tends to pair with fewer habits done (worth a closer look).`;
-}
-
-/** A label → value row for the insights panels. */
-function Line({ label, value, last }: { label: string; value: React.ReactNode; last?: boolean }) {
-  return (
-    <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 12, padding: "9px 0", borderBottom: last ? "none" : "1px solid var(--hc-rule)" }}>
-      <span style={{ fontSize: 12, color: "var(--hc-text-faint)", fontWeight: 600 }}>{label}</span>
-      <span style={{ fontSize: 13, color: "var(--hc-text-body)", fontWeight: 500, textAlign: "right" }}>{value}</span>
-    </div>
-  );
 }
 
 /** Silly button: a per-month running click count (persisted, debounced), and each click rains
@@ -581,26 +669,3 @@ function dropConfetti() {
 }
 
 /** Minimal markdown-ish renderer: paragraphs, `- ` bullets, and **bold** inline. */
-function renderReview(text: string) {
-  const bold = (s: string) =>
-    s.split(/(\*\*[^*]+\*\*)/g).map((part, i) =>
-      part.startsWith("**") && part.endsWith("**") ? <strong key={i}>{part.slice(2, -2)}</strong> : <span key={i}>{part}</span>);
-  const out: React.ReactNode[] = [];
-  let bullets: React.ReactNode[] = [];
-  const flush = () => {
-    if (!bullets.length) return;
-    out.push(<ul key={`u${out.length}`} style={{ margin: "8px 0", paddingLeft: 18, display: "flex", flexDirection: "column", gap: 7 }}>{bullets}</ul>);
-    bullets = [];
-  };
-  text.split("\n").forEach((raw, i) => {
-    const line = raw.trim();
-    if (!line) { flush(); return; }
-    const h = line.match(/^(#{1,6})\s+(.*)/); // markdown heading → a bigger, bold title
-    if (h) { flush(); out.push(<div key={i} style={{ fontSize: 16, fontWeight: 800, letterSpacing: "-.01em", margin: "16px 0 6px", color: "var(--hc-text)" }}>{bold(h[2])}</div>); return; }
-    const m = line.match(/^[-*]\s+(.*)/);
-    if (m) bullets.push(<li key={i} style={{ fontSize: 13, lineHeight: 1.5, color: "var(--hc-text-body)" }}>{bold(m[1])}</li>);
-    else { flush(); out.push(<p key={i} style={{ fontSize: 13, lineHeight: 1.55, margin: "8px 0", color: "var(--hc-text-body)" }}>{bold(line)}</p>); }
-  });
-  flush();
-  return out;
-}

@@ -67,6 +67,15 @@ export async function fetchMonthReview(year: number, month: number, refresh = fa
   return (await res.json()).review as string;
 }
 
+/** LLM review across ALL committed months (markdown). Cached server-side and only regenerated when
+ * the set of committed months changes; pass refresh to force it. `stale` = a cached review from a
+ * different set of months (served because no API key is configured to regenerate). */
+export async function fetchOverallReview(refresh = false): Promise<{ review: string; cached: boolean; months: number; stale: boolean }> {
+  const res = await fetch(`${await apiBase()}/review/overall${refresh ? "?refresh=true" : ""}`);
+  if (!res.ok) throw await detailError(res, "overall review failed");
+  return res.json();
+}
+
 /** Persist the (absolute) confetti click count for a month; returns the stored value. */
 export async function saveConfetti(year: number, month: number, count: number): Promise<number> {
   const res = await fetch(`${await apiBase()}/months/${year}/${month}/confetti`, {
@@ -76,6 +85,12 @@ export async function saveConfetti(year: number, month: number, count: number): 
   });
   if (!res.ok) throw await detailError(res, "confetti save failed");
   return (await res.json()).count as number;
+}
+
+/** Delete a committed month and all its data (grid, sleep, moments). Irreversible. */
+export async function deleteMonth(year: number, month: number): Promise<void> {
+  const res = await fetch(`${await apiBase()}/months/${year}/${month}`, { method: "DELETE" });
+  if (!res.ok) throw await detailError(res, "delete failed");
 }
 
 export async function fetchMonths(): Promise<MonthItem[]> {

@@ -1,14 +1,34 @@
 // View — month-over-month trends (spec 011). Fetches every committed month, reduces each with the
 // shared analytics (trendSeries → monthSummary), and charts completion, sleep, and per-habit %.
 // Rendering only; all numbers come from model/analytics.
-import { type ReactNode, useEffect, useMemo, useState } from "react";
-import { fetchMonth, fetchMonths } from "../model/api";
+import { type CSSProperties, type ReactNode, useEffect, useMemo, useState } from "react";
+import { fetchMonth, fetchMonths, fetchOverallReview } from "../model/api";
 import type { MonthData } from "../model/types";
 import { type MonthSummary, trendSeries } from "../model/analytics";
 import { MON3, PANEL } from "./theme";
+import { renderReview } from "./Markdown";
 
 const msg = (e: unknown) => String(e instanceof Error ? e.message : e);
 const label = (s: { year: number; month: number }) => `${MON3[s.month - 1]} ${String(s.year).slice(2)}`;
+
+// Merge habit names that differ only by case / spacing / punctuation across months (e.g.
+// "Self Control" vs "self control", "1 Page of Qur'an" vs "1 Page of Quran"). Genuine spelling
+// differences ("Editig" vs "Editing") stay separate — those are real data typos to fix at the source.
+const norm = (s: string) => s.trim().toLowerCase().replace(/['’.]/g, "").replace(/\s+/g, " ");
+
+// Chart x-domain: walk the committed months forward to at least `min` slots so a couple of months
+// don't stretch across the whole chart; the untracked trailing months read as "not filled yet".
+function chartMonths(series: MonthSummary[], min = 6): { year: number; month: number; s: MonthSummary | null }[] {
+  if (!series.length) return [];
+  const byKey = new Map(series.map((s) => [`${s.year}-${s.month}`, s]));
+  const out: { year: number; month: number; s: MonthSummary | null }[] = [];
+  let y = series[0].year, m = series[0].month;
+  for (let i = 0; i < Math.max(series.length, min); i++) {
+    out.push({ year: y, month: m, s: byKey.get(`${y}-${m}`) ?? null });
+    if (++m > 12) { m = 1; y++; }
+  }
+  return out;
+}
 
 /** Green tint for a 0–100 completion cell (blank when null/absent). */
 function heat(pct: number | null): { bg: string; color: string } {
@@ -17,25 +37,35 @@ function heat(pct: number | null): { bg: string; color: string } {
   return { bg: `color-mix(in srgb, var(--hc-done) ${Math.round(a * 100)}%, transparent)`, color: pct >= 62 ? "#fff" : "var(--hc-text-body)" };
 }
 
-/** Minimal line chart over the months: values[i] may be null (gap). vmax fixes the y-scale. */
+// integers stay integer, floats show one decimal (so a raw mean like 7.8548… reads as "7.9")
+const fmt = (v: number) => (Number.isInteger(v) ? String(v) : (Math.round(v * 10) / 10).toString());
+
+/** Minimal line chart over the months: values[i] may be null (gap). vmax fixes the y-scale.
+ * The line + gridlines live in a stretched SVG (a line stays a line under non-uniform scale), but
+ * the dots and value labels are overlaid as HTML so they stay round and undistorted. */
 function MiniLine({ values, vmax, unit, stroke }: { values: (number | null)[]; vmax: number; unit: string; stroke: string }) {
   const n = values.length;
-  const X = (i: number) => (n > 1 ? (i / (n - 1)) * 600 : 300);
-  const Y = (v: number) => 158 - (v / vmax) * 150;
-  const pts = values.map((v, i) => (v === null ? null : { x: X(i), y: Y(v), v, i })).filter((p): p is { x: number; y: number; v: number; i: number } => p !== null);
-  // draw one polyline through the present points (gaps just connect across — months without data are rare)
-  const line = pts.length ? "M" + pts.map((p) => `${p.x.toFixed(1)},${p.y.toFixed(1)}`).join("L") : "";
+  const H = 150;
+  const xPct = (i: number) => ((i + 0.5) / n) * 100; // center each month in its column (matches the axis)
+  const yPx = (v: number) => ((158 - (v / vmax) * 150) / 160) * H;
+  const pts = values.map((v, i) => (v === null ? null : { v, i })).filter((p): p is { v: number; i: number } => p !== null);
+  const line = pts.length ? "M" + pts.map((p) => `${(((p.i + 0.5) / n) * 600).toFixed(1)},${(158 - (p.v / vmax) * 150).toFixed(1)}`).join("L") : "";
   return (
-    <svg viewBox="0 0 600 160" preserveAspectRatio="none" style={{ width: "100%", height: 150, display: "block", overflow: "visible" }}>
-      {[8, 83, 158].map((y) => <line key={y} x1="0" y1={y} x2="600" y2={y} stroke="var(--hc-rule)" strokeWidth="1" vectorEffect="non-scaling-stroke" />)}
-      {pts.length > 1 && <path d={line} fill="none" stroke={stroke} strokeWidth="2.2" strokeLinejoin="round" strokeLinecap="round" vectorEffect="non-scaling-stroke" />}
-      {pts.map((p) => (
-        <g key={p.i}>
-          <circle cx={p.x} cy={p.y} r="4" fill="#fff" stroke={stroke} strokeWidth="2.5" vectorEffect="non-scaling-stroke" />
-          <text x={p.x} y={p.y - 9} textAnchor="middle" fontSize="11" fill="var(--hc-text-muted)" style={{ fontVariantNumeric: "tabular-nums" }}>{p.v}{unit}</text>
-        </g>
-      ))}
-    </svg>
+    <div style={{ position: "relative", height: H }}>
+      <svg viewBox="0 0 600 160" preserveAspectRatio="none" style={{ position: "absolute", inset: 0, width: "100%", height: "100%", display: "block" }}>
+        {[8, 83, 158].map((y) => <line key={y} x1="0" y1={y} x2="600" y2={y} stroke="var(--hc-rule)" strokeWidth="1" vectorEffect="non-scaling-stroke" />)}
+        {pts.length > 1 && <path d={line} fill="none" stroke={stroke} strokeWidth="2.2" strokeLinejoin="round" strokeLinecap="round" vectorEffect="non-scaling-stroke" />}
+      </svg>
+      {pts.map((p) => {
+        const y = yPx(p.v);
+        return (
+          <div key={p.i}>
+            <div style={{ position: "absolute", left: `${xPct(p.i)}%`, top: y, transform: "translate(-50%,-50%)", width: 9, height: 9, borderRadius: "50%", background: "#fff", border: `2.5px solid ${stroke}`, boxSizing: "border-box" }} />
+            <div style={{ position: "absolute", left: `${xPct(p.i)}%`, top: y < 22 ? y + 12 : y - 20, transform: "translateX(-50%)", fontSize: 11, color: "var(--hc-text-muted)", fontVariantNumeric: "tabular-nums", whiteSpace: "nowrap" }}>{fmt(p.v)}{unit}</div>
+          </div>
+        );
+      })}
+    </div>
   );
 }
 
@@ -51,15 +81,150 @@ function ChartCard({ title, sub, children }: { title: string; sub: string; child
   );
 }
 
-function MonthAxis({ series }: { series: MonthSummary[] }) {
+function MonthAxis({ months }: { months: { year: number; month: number }[] }) {
   return (
-    <div style={{ display: "grid", gridTemplateColumns: `repeat(${series.length}, 1fr)`, marginTop: 7 }}>
-      {series.map((s) => (
+    <div style={{ display: "grid", gridTemplateColumns: `repeat(${months.length}, 1fr)`, marginTop: 7 }}>
+      {months.map((s) => (
         <div key={`${s.year}-${s.month}`} style={{ fontSize: 10, color: "var(--hc-text-faint)", textAlign: "center", fontVariantNumeric: "tabular-nums" }}>{label(s)}</div>
       ))}
     </div>
   );
 }
+
+type PctFn = (key: string, s: MonthSummary) => number | null;
+type Groups = { key: string; name: string }[];
+
+/** Month x habit heatmap with a low->high legend. */
+function HabitHeatmap({ groups, months, pct }: { groups: Groups; months: MonthSummary[]; pct: PctFn }) {
+  return (
+    <div style={{ overflowX: "auto" }}>
+      <table style={{ borderCollapse: "separate", borderSpacing: 6, width: "100%", minWidth: 360 }}>
+        <thead>
+          <tr>
+            <th />
+            {months.map((s) => <th key={`${s.year}-${s.month}`} style={{ fontSize: 11.5, fontWeight: 700, color: "var(--hc-text-muted)", textAlign: "center", minWidth: 56 }}>{label(s)}</th>)}
+          </tr>
+        </thead>
+        <tbody>
+          {groups.map((g) => (
+            <tr key={g.key}>
+              <td style={{ fontSize: 12.5, fontWeight: 500, color: "var(--hc-text-body)", padding: "0 10px 0 4px", whiteSpace: "nowrap", maxWidth: 170, overflow: "hidden", textOverflow: "ellipsis" }} title={g.name}>{g.name}</td>
+              {months.map((s) => {
+                const p = pct(g.key, s);
+                const { bg, color } = heat(p);
+                return <td key={`${s.year}-${s.month}`} style={{ textAlign: "center", fontSize: 12, fontWeight: 700, color, background: bg, borderRadius: 8, height: 34, fontVariantNumeric: "tabular-nums" }}>{p === null ? "" : `${p}%`}</td>;
+              })}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 14, fontSize: 11, color: "var(--hc-text-faint)" }}>
+        <span>0%</span>
+        <div style={{ width: 130, height: 8, borderRadius: 4, background: "linear-gradient(to right, color-mix(in srgb, var(--hc-done) 12%, transparent), var(--hc-done))" }} />
+        <span>100%</span>
+      </div>
+    </div>
+  );
+}
+
+function Metric({ label: lbl, value, sub, accent }: { label: string; value: string; sub?: string; accent?: string }) {
+  return (
+    <div style={{ background: "var(--hc-surface-sunk)", borderRadius: 12, padding: "12px 14px", minWidth: 0 }}>
+      <div style={{ fontSize: 10, letterSpacing: ".08em", textTransform: "uppercase", color: "var(--hc-text-faint)", fontWeight: 700 }}>{lbl}</div>
+      <div style={{ fontSize: 22, fontWeight: 900, marginTop: 4, color: accent ?? "var(--hc-text)", fontVariantNumeric: "tabular-nums", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{value}</div>
+      {sub && <div style={{ fontSize: 11, color: "var(--hc-text-muted)", marginTop: 2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{sub}</div>}
+    </div>
+  );
+}
+
+function SubTitle({ children }: { children: ReactNode }) {
+  return <div style={{ fontSize: 12.5, fontWeight: 800, color: "var(--hc-text)", margin: "22px 0 12px", letterSpacing: "-.01em" }}>{children}</div>;
+}
+
+/** Cross-month report: computed metric tiles plus an on-demand AI narrative that is cached
+ * server-side until the set of committed months changes. */
+function OverallReview({ series, groups, pct }: { series: MonthSummary[]; groups: Groups; pct: PctFn }) {
+  const [state, setState] = useState<"idle" | "loading" | "done" | "error">("idle");
+  const [text, setText] = useState("");
+  const [stale, setStale] = useState(false);
+  const [err, setErr] = useState("");
+
+  // On mount, pull a cached review if one already exists (no AI call); a 404/no-cache leaves it idle.
+  useEffect(() => {
+    let live = true;
+    (async () => {
+      try {
+        const r = await fetchOverallReview();
+        if (live) { setText(r.review); setStale(r.stale); setState("done"); }
+      } catch { /* nothing cached yet — stay idle, wait for the button */ }
+    })();
+    return () => { live = false; };
+  }, [series.length]);
+
+  const run = async (refresh: boolean) => {
+    setState("loading"); setErr("");
+    try {
+      const r = await fetchOverallReview(refresh);
+      setText(r.review); setStale(r.stale); setState("done");
+    } catch (e) { setErr(msg(e)); setState("error"); }
+  };
+
+  // --- computed metrics (no AI needed) ---
+  const n = series.length;
+  const avgCompletion = Math.round(series.reduce((a, s) => a + s.completion, 0) / n);
+  const bestMonth = series.reduce((a, s) => (s.completion > a.completion ? s : a));
+  const worstMonth = series.reduce((a, s) => (s.completion < a.completion ? s : a));
+  const first = series[0], last = series[n - 1];
+  const delta = last.completion - first.completion; // trend over the tracked span
+  const sleepMonths = series.filter((s) => s.meanSleep !== null);
+  const meanSleepAll = sleepMonths.length ? sleepMonths.reduce((a, s) => a + (s.meanSleep as number), 0) / sleepMonths.length : null;
+  const bestStreak = series.reduce((a, s) => Math.max(a, s.bestStreak), 0);
+
+  // Habit leaderboard: each habit's average completion across the months it was tracked.
+  const leaderboard = groups
+    .map((g) => {
+      const vals = series.map((s) => pct(g.key, s)).filter((v): v is number => v !== null);
+      return { name: g.name, avg: vals.length ? Math.round(vals.reduce((a, b) => a + b, 0) / vals.length) : 0 };
+    })
+    .sort((a, b) => b.avg - a.avg);
+
+  return (
+    <ChartCard title="Full review ✨" sub={`Metrics and an AI read across all ${n} committed month${n === 1 ? "" : "s"}, refreshed when you add or change a month`}>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(130px, 1fr))", gap: 8 }}>
+        <Metric label="Months" value={String(n)} sub={`${label(first)} to ${label(last)}`} />
+        <Metric label="Avg completion" value={`${avgCompletion}%`} accent="var(--hc-done-text)" sub="across all months" />
+        <Metric label="Best month" value={`${bestMonth.completion}%`} accent="var(--hc-done-text)" sub={label(bestMonth)} />
+        <Metric label="Worst month" value={`${worstMonth.completion}%`} accent="var(--hc-missed-text)" sub={label(worstMonth)} />
+        <Metric label="Trend" value={n < 2 ? "·" : `${delta > 0 ? "+" : ""}${delta}%`} accent={delta >= 0 ? "var(--hc-done-text)" : "var(--hc-missed-text)"} sub={n < 2 ? "one month so far" : delta > 0 ? "improving" : delta < 0 ? "slipping" : "holding steady"} />
+        <Metric label="Mean sleep" value={meanSleepAll !== null ? `${fmt(Math.round(meanSleepAll * 10) / 10)}h` : "·"} accent="var(--hc-sleep)" sub={meanSleepAll !== null ? `${sleepMonths.length} month${sleepMonths.length === 1 ? "" : "s"} logged` : "no sleep logged"} />
+        <Metric label="Top habit" value={leaderboard[0] ? `${leaderboard[0].avg}%` : "·"} accent="var(--hc-done-text)" sub={leaderboard[0]?.name} />
+        <Metric label="Best streak" value={bestStreak ? `${bestStreak}d` : "·"} sub="longest run, any month" />
+      </div>
+
+      <SubTitle>AI review across the months ✨</SubTitle>
+      {state === "idle" && <button onClick={() => run(false)} style={reviewBtn}>Generate AI review</button>}
+      {state === "loading" && <div style={{ fontSize: 13, color: "var(--hc-text-muted)" }}>Reading every month…</div>}
+      {state === "error" && (
+        <div>
+          <div style={{ fontSize: 12.5, color: "var(--hc-flag-text)", marginBottom: 10 }}>{err}</div>
+          <button onClick={() => run(false)} style={reviewBtn}>Try again</button>
+        </div>
+      )}
+      {state === "done" && (
+        <div>
+          {stale && <div style={{ fontSize: 11.5, color: "var(--hc-flag-text)", marginBottom: 8 }}>Your months changed since this was written. Add an AI key to regenerate.</div>}
+          <div>{renderReview(text)}</div>
+          <button onClick={() => run(true)} style={{ ...reviewBtn, marginTop: 14, background: "var(--hc-surface-sunk)", color: "var(--hc-text-muted)", border: "1px solid var(--hc-border)" }}>Regenerate</button>
+        </div>
+      )}
+    </ChartCard>
+  );
+}
+
+const reviewBtn: CSSProperties = {
+  padding: "9px 16px", fontSize: 13, fontWeight: 700, borderRadius: 9, cursor: "pointer",
+  fontFamily: "var(--hc-font-body)", background: "var(--hc-surface-ink)", color: "#fff", border: "none",
+};
 
 export function TrendsView() {
   const [series, setSeries] = useState<MonthSummary[] | null>(null);
@@ -75,21 +240,24 @@ export function TrendsView() {
     })();
   }, []);
 
-  // union of habit names across months, in first-seen order
-  const habitNames = useMemo(() => {
-    const seen: string[] = [];
-    for (const s of series ?? []) for (const h of s.perHabit) if (!seen.includes(h.name)) seen.push(h.name);
-    return seen;
+  // union of habits across months, grouped by normalized name (merges case/spacing/punctuation
+  // variants), keeping the first-seen spelling as the display name.
+  const habitGroups = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const s of series ?? []) for (const h of s.perHabit) { const k = norm(h.name); if (!map.has(k)) map.set(k, h.name); }
+    return [...map.entries()].map(([key, name]) => ({ key, name }));
   }, [series]);
 
   if (err) return <p style={{ color: "var(--hc-flag-text)" }}>{err}</p>;
   if (!series) return <p style={{ color: "var(--hc-text-muted)" }}>loading…</p>;
   if (series.length === 0) return <p style={{ color: "var(--hc-text-muted)" }}>No months yet. Import one from the Import tab.</p>;
 
-  const sleepVals = series.map((s) => s.meanSleep);
-  const hasSleep = sleepVals.some((v) => v !== null);
-  const sleepMax = Math.max(10, ...sleepVals.filter((v): v is number => v !== null));
-  const pctByHabit = (name: string, s: MonthSummary) => s.perHabit.find((h) => h.name === name)?.pct ?? null;
+  const cm = chartMonths(series); // padded with trailing untracked months so the line isn't stretched
+  const completionVals = cm.map((c) => (c.s ? c.s.completion : null));
+  const sleepVals = cm.map((c) => (c.s ? c.s.meanSleep : null));
+  const hasSleep = series.some((s) => s.meanSleep !== null);
+  const sleepMax = Math.max(10, ...series.map((s) => s.meanSleep).filter((v): v is number => v !== null));
+  const pctByHabit = (key: string, s: MonthSummary) => s.perHabit.find((h) => norm(h.name) === key)?.pct ?? null;
 
   return (
     <div style={{ width: "100%", display: "grid", gap: 14, textAlign: "left" }}>
@@ -102,47 +270,22 @@ export function TrendsView() {
       </div>
 
       <ChartCard title="Completion" sub="Percent of tracked cells done, per month">
-        <MiniLine values={series.map((s) => s.completion)} vmax={100} unit="%" stroke="var(--hc-done)" />
-        <MonthAxis series={series} />
+        <MiniLine values={completionVals} vmax={100} unit="%" stroke="var(--hc-done)" />
+        <MonthAxis months={cm} />
       </ChartCard>
 
       {hasSleep && (
         <ChartCard title="Mean sleep" sub="Average hours per night, per month (months with no sleep logged are skipped)">
           <MiniLine values={sleepVals} vmax={sleepMax} unit="h" stroke="var(--hc-sleep)" />
-          <MonthAxis series={series} />
+          <MonthAxis months={cm} />
         </ChartCard>
       )}
 
       <ChartCard title="Per-habit completion" sub="Each habit's monthly completion %; blank where the habit wasn't tracked that month">
-        <div style={{ overflowX: "auto" }}>
-          <table style={{ borderCollapse: "separate", borderSpacing: 4, width: "100%", minWidth: 320 }}>
-            <thead>
-              <tr>
-                <th style={{ textAlign: "left", fontSize: 11.5, fontWeight: 700, color: "var(--hc-text-muted)", padding: "0 8px" }} />
-                {series.map((s) => (
-                  <th key={`${s.year}-${s.month}`} style={{ fontSize: 11, fontWeight: 700, color: "var(--hc-text-muted)", textAlign: "center", fontVariantNumeric: "tabular-nums", minWidth: 44 }}>{label(s)}</th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {habitNames.map((name) => (
-                <tr key={name}>
-                  <td style={{ fontSize: 12, fontWeight: 500, color: "var(--hc-text-body)", padding: "0 8px", whiteSpace: "nowrap", maxWidth: 160, overflow: "hidden", textOverflow: "ellipsis" }} title={name}>{name}</td>
-                  {series.map((s) => {
-                    const p = pctByHabit(name, s);
-                    const { bg, color } = heat(p);
-                    return (
-                      <td key={`${s.year}-${s.month}`} style={{ textAlign: "center", fontSize: 11.5, fontVariantNumeric: "tabular-nums", fontWeight: 700, color, background: bg, borderRadius: 6, height: 26 }}>
-                        {p === null ? "" : `${p}%`}
-                      </td>
-                    );
-                  })}
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+        <HabitHeatmap groups={habitGroups} months={series} pct={pctByHabit} />
       </ChartCard>
+
+      <OverallReview series={series} groups={habitGroups} pct={pctByHabit} />
     </div>
   );
 }

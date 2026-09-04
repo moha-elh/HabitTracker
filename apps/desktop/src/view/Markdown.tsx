@@ -3,9 +3,13 @@
 import type { ReactNode } from "react";
 
 export function renderReview(text: string): ReactNode[] {
+  // Emphasize **double** and *single* asterisks alike — the model is told to bold key values with
+  // ** but slips to * sometimes; treat both as bold so no literal asterisks leak into the text.
   const bold = (s: string) =>
-    s.split(/(\*\*[^*]+\*\*)/g).map((part, i) =>
-      part.startsWith("**") && part.endsWith("**") ? <strong key={i}>{part.slice(2, -2)}</strong> : <span key={i}>{part}</span>);
+    s.split(/(\*\*[^*]+\*\*|\*[^*\n]+\*)/g).map((part, i) =>
+      /^\*\*[^*]+\*\*$/.test(part) ? <strong key={i}>{part.slice(2, -2)}</strong>
+      : /^\*[^*\n]+\*$/.test(part) ? <strong key={i}>{part.slice(1, -1)}</strong>
+      : <span key={i}>{part}</span>);
   const out: ReactNode[] = [];
   let bullets: ReactNode[] = [];
   const flush = () => {

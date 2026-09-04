@@ -127,18 +127,14 @@ function HabitHeatmap({ groups, months, pct }: { groups: Groups; months: MonthSu
   );
 }
 
-function Metric({ label: lbl, value, sub, accent }: { label: string; value: string; sub?: string; accent?: string }) {
+function Metric({ label: lbl, value, sub, accent, tip }: { label: string; value: string; sub?: string; accent?: string; tip?: string }) {
   return (
-    <div style={{ background: "var(--hc-surface-sunk)", borderRadius: 12, padding: "12px 14px", minWidth: 0 }}>
+    <div title={tip} style={{ background: "var(--hc-surface-sunk)", borderRadius: 12, padding: "12px 14px", minWidth: 0, cursor: tip ? "help" : "default" }}>
       <div style={{ fontSize: 10, letterSpacing: ".08em", textTransform: "uppercase", color: "var(--hc-text-faint)", fontWeight: 700 }}>{lbl}</div>
       <div style={{ fontSize: 22, fontWeight: 900, marginTop: 4, color: accent ?? "var(--hc-text)", fontVariantNumeric: "tabular-nums", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{value}</div>
       {sub && <div style={{ fontSize: 11, color: "var(--hc-text-muted)", marginTop: 2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{sub}</div>}
     </div>
   );
-}
-
-function SubTitle({ children }: { children: ReactNode }) {
-  return <div style={{ fontSize: 12.5, fontWeight: 800, color: "var(--hc-text)", margin: "22px 0 12px", letterSpacing: "-.01em" }}>{children}</div>;
 }
 
 /** Cross-month report: computed metric tiles plus an on-demand AI narrative that is cached
@@ -149,18 +145,9 @@ function OverallReview({ series, groups, pct }: { series: MonthSummary[]; groups
   const [stale, setStale] = useState(false);
   const [err, setErr] = useState("");
 
-  // On mount, pull a cached review if one already exists (no AI call); a 404/no-cache leaves it idle.
-  useEffect(() => {
-    let live = true;
-    (async () => {
-      try {
-        const r = await fetchOverallReview();
-        if (live) { setText(r.review); setStale(r.stale); setState("done"); }
-      } catch { /* nothing cached yet — stay idle, wait for the button */ }
-    })();
-    return () => { live = false; };
-  }, [series.length]);
-
+  // Nothing is shown or fetched on load — the review appears only after the user clicks Generate.
+  // A click with a valid cached review still returns instantly (no AI call); it only generates when
+  // the cache is missing or the months changed.
   const run = async (refresh: boolean) => {
     setState("loading"); setErr("");
     try {
@@ -191,18 +178,20 @@ function OverallReview({ series, groups, pct }: { series: MonthSummary[]; groups
   return (
     <ChartCard title="Full review ✨" sub={`Metrics and an AI read across all ${n} committed month${n === 1 ? "" : "s"}, refreshed when you add or change a month`}>
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(130px, 1fr))", gap: 8 }}>
-        <Metric label="Months" value={String(n)} sub={`${label(first)} to ${label(last)}`} />
-        <Metric label="Avg completion" value={`${avgCompletion}%`} accent="var(--hc-done-text)" sub="across all months" />
-        <Metric label="Best month" value={`${bestMonth.completion}%`} accent="var(--hc-done-text)" sub={label(bestMonth)} />
-        <Metric label="Worst month" value={`${worstMonth.completion}%`} accent="var(--hc-missed-text)" sub={label(worstMonth)} />
-        <Metric label="Trend" value={n < 2 ? "·" : `${delta > 0 ? "+" : ""}${delta}%`} accent={delta >= 0 ? "var(--hc-done-text)" : "var(--hc-missed-text)"} sub={n < 2 ? "one month so far" : delta > 0 ? "improving" : delta < 0 ? "slipping" : "holding steady"} />
-        <Metric label="Mean sleep" value={meanSleepAll !== null ? `${fmt(Math.round(meanSleepAll * 10) / 10)}h` : "·"} accent="var(--hc-sleep)" sub={meanSleepAll !== null ? `${sleepMonths.length} month${sleepMonths.length === 1 ? "" : "s"} logged` : "no sleep logged"} />
-        <Metric label="Top habit" value={leaderboard[0] ? `${leaderboard[0].avg}%` : "·"} accent="var(--hc-done-text)" sub={leaderboard[0]?.name} />
-        <Metric label="Best streak" value={bestStreak ? `${bestStreak}d` : "·"} sub="longest run, any month" />
+        <Metric label="Months" value={String(n)} sub={`${label(first)} to ${label(last)}`} tip="How many committed months this review covers, from your first tracked month to your latest." />
+        <Metric label="Avg completion" value={`${avgCompletion}%`} sub="across all months" tip="Average of each month's completion (the percent of tracked habit cells you marked done), across every committed month." />
+        <Metric label="Best month" value={`${bestMonth.completion}%`} sub={label(bestMonth)} tip={`Your highest-completion month so far: ${label(bestMonth)} at ${bestMonth.completion}%.`} />
+        <Metric label="Worst month" value={`${worstMonth.completion}%`} sub={label(worstMonth)} tip={`Your lowest-completion month so far: ${label(worstMonth)} at ${worstMonth.completion}%. A place to look at what got in the way.`} />
+        <Metric label="Trend" value={n < 2 ? "·" : `${delta > 0 ? "+" : ""}${delta}%`} accent={n < 2 ? undefined : delta >= 0 ? "var(--hc-done-text)" : "var(--hc-missed-text)"} sub={n < 2 ? "one month so far" : delta > 0 ? "improving" : delta < 0 ? "slipping" : "holding steady"} tip="Change in completion from your first tracked month to your latest. Positive means you're improving overall, negative means you're slipping. Needs at least 2 months." />
+        <Metric label="Mean sleep" value={meanSleepAll !== null ? `${fmt(Math.round(meanSleepAll * 10) / 10)}h` : "·"} sub={meanSleepAll !== null ? `${sleepMonths.length} month${sleepMonths.length === 1 ? "" : "s"} logged` : "no sleep logged"} tip="Average hours of sleep per night, averaged over the months where you logged any sleep. Months with no sleep data are skipped." />
+        <Metric label="Top habit" value={leaderboard[0] ? `${leaderboard[0].avg}%` : "·"} sub={leaderboard[0]?.name} tip={leaderboard[0] ? `Your most consistent habit across the months: ${leaderboard[0].name}, done ${leaderboard[0].avg}% of tracked days on average.` : "Your most consistent habit across all months."} />
+        <Metric label="Best streak" value={bestStreak ? `${bestStreak}d` : "·"} sub="longest run, any month" tip="The longest unbroken run of done days for any single habit in any month. Your record streak so far." />
       </div>
 
-      <SubTitle>AI review across the months ✨</SubTitle>
-      {state === "idle" && <button onClick={() => run(false)} style={reviewBtn}>Generate AI review</button>}
+      <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap", margin: "22px 0 12px" }}>
+        <div style={{ fontSize: 12.5, fontWeight: 800, color: "var(--hc-text)", letterSpacing: "-.01em" }}>AI review across the months ✨</div>
+        {state === "idle" && <button onClick={() => run(false)} style={reviewBtn}>Generate AI review</button>}
+      </div>
       {state === "loading" && <div style={{ fontSize: 13, color: "var(--hc-text-muted)" }}>Reading every month…</div>}
       {state === "error" && (
         <div>

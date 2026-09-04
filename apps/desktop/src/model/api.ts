@@ -68,10 +68,12 @@ export async function fetchMonthReview(year: number, month: number, refresh = fa
 }
 
 /** LLM review across ALL committed months (markdown). Cached server-side and only regenerated when
- * the set of committed months changes; pass refresh to force it. `stale` = a cached review from a
- * different set of months (served because no API key is configured to regenerate). */
-export async function fetchOverallReview(refresh = false): Promise<{ review: string; cached: boolean; months: number; stale: boolean }> {
-  const res = await fetch(`${await apiBase()}/review/overall${refresh ? "?refresh=true" : ""}`);
+ * the set of committed months changes; pass refresh to force it. `onlyCached` never calls the AI
+ * (used on page load): returns an existing cached review or throws 404. `stale` = a cached review
+ * from a different set of months. */
+export async function fetchOverallReview(refresh = false, onlyCached = false): Promise<{ review: string; cached: boolean; months: number; stale: boolean }> {
+  const q = refresh ? "?refresh=true" : onlyCached ? "?only_cached=true" : "";
+  const res = await fetch(`${await apiBase()}/review/overall${q}`);
   if (!res.ok) throw await detailError(res, "overall review failed");
   return res.json();
 }
